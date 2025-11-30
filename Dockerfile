@@ -67,6 +67,17 @@ WORKDIR /comfyui
 # Support for the network volume
 ADD src/extra_model_paths.yaml ./
 
+# Install Custom Nodes
+WORKDIR /comfyui/custom_nodes
+RUN git clone https://github.com/cubiq/ComfyUI_essentials.git \
+    && git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
+    && git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git
+
+# Install Requirements for Custom Nodes
+RUN pip install --no-cache-dir -r ComfyUI_essentials/requirements.txt || echo "No reqs" \
+    && pip install --no-cache-dir -r ComfyUI-VideoHelperSuite/requirements.txt || echo "No reqs" \
+    && pip install --no-cache-dir -r ComfyUI-WanVideoWrapper/requirements.txt || echo "No reqs"
+
 # Go back to the root
 WORKDIR /
 
