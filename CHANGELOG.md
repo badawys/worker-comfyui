@@ -1,3 +1,13 @@
+# [5.4.0](https://github.com/runpod-workers/worker-comfyui/compare/5.3.0...5.4.0) (2025-11-30)
+
+
+### Features
+
+* add support for `BUCKET_NAME` environment variable for S3 uploads
+* add support for `COMFY_OUTPUT_DIR` environment variable to configure output directory
+* add support for video/gif outputs in handler
+* add custom nodes: `ComfyUI_essentials`, `ComfyUI-VideoHelperSuite`, `ComfyUI-WanVideoWrapper`
+
 # [5.3.0](https://github.com/runpod-workers/worker-comfyui/compare/5.2.0...5.3.0) (2025-07-22)
 
 
