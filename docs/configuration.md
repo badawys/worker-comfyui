@@ -2,7 +2,7 @@
 
 This document outlines the environment variables available for configuring the `worker-comfyui`.
 
-## General Configuration
+## General Configuration 
 
 | Environment Variable | Description                                                                                                                                                                                                                  | Default |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
