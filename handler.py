@@ -492,6 +492,25 @@ def get_image_data(filename, subfolder, image_type):
         return None
 
 
+def upload_to_s3(job_id, file_path, filename):
+    """
+    Upload a file to S3, using BUCKET_NAME if available, otherwise default rp_upload.
+    """
+    bucket_name = os.environ.get("BUCKET_NAME")
+    if bucket_name:
+        bucket_creds = {
+            "endpointUrl": os.environ.get("BUCKET_ENDPOINT_URL"),
+            "accessId": os.environ.get("BUCKET_ACCESS_KEY_ID"),
+            "accessSecret": os.environ.get("BUCKET_SECRET_ACCESS_KEY"),
+        }
+        # upload_file_to_bucket(file_name, file_location, bucket_creds, bucket_name=None, prefix=None)
+        return rp_upload.upload_file_to_bucket(
+            filename, file_path, bucket_creds, bucket_name=bucket_name, prefix=job_id
+        )
+    else:
+        return rp_upload.upload_image(job_id, file_path)
+
+
 def handler(job):
     """
     Handles a job using ComfyUI via websockets for status and image retrieval.
@@ -706,7 +725,7 @@ def handler(job):
                                 )
 
                                 print(f"worker-comfyui - Uploading {filename} to S3...")
-                                s3_url = rp_upload.upload_image(job_id, temp_file_path)
+                                s3_url = upload_to_s3(job_id, temp_file_path, filename)
                                 os.remove(temp_file_path)  # Clean up temp file
                                 print(
                                     f"worker-comfyui - Uploaded {filename} to S3: {s3_url}"
@@ -755,8 +774,98 @@ def handler(job):
                         error_msg = f"Failed to fetch image data for {filename} from /view endpoint."
                         errors.append(error_msg)
 
+            # Handle video/gif outputs
+            if "gifs" in node_output:
+                print(
+                    f"worker-comfyui - Node {node_id} contains {len(node_output['gifs'])} gif(s)/video(s)"
+                )
+                for gif_info in node_output["gifs"]:
+                    filename = gif_info.get("filename")
+                    subfolder = gif_info.get("subfolder", "")
+                    gif_type = gif_info.get("type")
+
+                    # skip temp gifs
+                    if gif_type == "temp":
+                        print(
+                            f"worker-comfyui - Skipping gif {filename} because type is 'temp'"
+                        )
+                        continue
+
+                    if not filename:
+                        warn_msg = f"Skipping gif in node {node_id} due to missing filename: {gif_info}"
+                        print(f"worker-comfyui - {warn_msg}")
+                        errors.append(warn_msg)
+                        continue
+
+                    # We use the same get_image_data function as it just fetches from /view
+                    gif_bytes = get_image_data(filename, subfolder, gif_type)
+
+                    if gif_bytes:
+                        file_extension = os.path.splitext(filename)[1] or ".gif"
+
+                        if os.environ.get("BUCKET_ENDPOINT_URL"):
+                            try:
+                                with tempfile.NamedTemporaryFile(
+                                    suffix=file_extension, delete=False
+                                ) as temp_file:
+                                    temp_file.write(gif_bytes)
+                                    temp_file_path = temp_file.name
+                                print(
+                                    f"worker-comfyui - Wrote gif bytes to temporary file: {temp_file_path}"
+                                )
+
+                                print(f"worker-comfyui - Uploading {filename} to S3...")
+                                s3_url = upload_to_s3(job_id, temp_file_path, filename)
+                                os.remove(temp_file_path)  # Clean up temp file
+                                print(
+                                    f"worker-comfyui - Uploaded {filename} to S3: {s3_url}"
+                                )
+                                # Append dictionary with filename and URL
+                                output_data.append(
+                                    {
+                                        "filename": filename,
+                                        "type": "s3_url",
+                                        "data": s3_url,
+                                    }
+                                )
+                            except Exception as e:
+                                error_msg = f"Error uploading {filename} to S3: {e}"
+                                print(f"worker-comfyui - {error_msg}")
+                                errors.append(error_msg)
+                                if "temp_file_path" in locals() and os.path.exists(
+                                    temp_file_path
+                                ):
+                                    try:
+                                        os.remove(temp_file_path)
+                                    except OSError as rm_err:
+                                        print(
+                                            f"worker-comfyui - Error removing temp file {temp_file_path}: {rm_err}"
+                                        )
+                        else:
+                            # Return as base64 string
+                            try:
+                                base64_gif = base64.b64encode(gif_bytes).decode(
+                                    "utf-8"
+                                )
+                                # Append dictionary with filename and base64 data
+                                output_data.append(
+                                    {
+                                        "filename": filename,
+                                        "type": "base64",
+                                        "data": base64_gif,
+                                    }
+                                )
+                                print(f"worker-comfyui - Encoded {filename} as base64")
+                            except Exception as e:
+                                error_msg = f"Error encoding {filename} to base64: {e}"
+                                print(f"worker-comfyui - {error_msg}")
+                                errors.append(error_msg)
+                    else:
+                        error_msg = f"Failed to fetch gif data for {filename} from /view endpoint."
+                        errors.append(error_msg)
+
             # Check for other output types
-            other_keys = [k for k in node_output.keys() if k != "images"]
+            other_keys = [k for k in node_output.keys() if k not in ("images", "gifs")]
             if other_keys:
                 warn_msg = (
                     f"Node {node_id} produced unhandled output keys: {other_keys}."
