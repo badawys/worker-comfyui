@@ -10,6 +10,7 @@ This document outlines the environment variables available for configuring the `
 | `SERVE_API_LOCALLY`  | When `true`, enables a local HTTP server simulating the RunPod environment for development and testing. See the [Development Guide](development.md#local-api) for more details.                                              | `false` |
 | `COMFY_ORG_API_KEY`  | Comfy.org API key to enable ComfyUI API Nodes. If set, it is sent with each workflow; clients can override per request via `input.api_key_comfy_org`.                                                                        | –       |
 | `COMFY_OUTPUT_DIR`   | Specifies the directory where ComfyUI should save generated outputs. Useful for persisting outputs to a network volume.                                                                                                      | –       |
+| `COMFY_SKIP_BASE64`  | When `true`, skips returning base64 encoded data in the response if S3 upload is not configured. Useful when you only need the filename/path.                                                                                | `false` |
 
 ## Logging Configuration
 

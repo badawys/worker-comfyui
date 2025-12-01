@@ -115,6 +115,7 @@ Each object within the `input.images` array must contain:
     "images": [
       {
         "filename": "ComfyUI_00001_.png",
+        "subfolder": "",
         "type": "base64",
         "data": "iVBORw0KGgoAAAANSUhEUg..."
       }
@@ -122,6 +123,61 @@ Each object within the `input.images` array must contain:
   },
   "delayTime": 123,
   "executionTime": 4567
+}
+```
+
+### Output Scenarios
+
+#### 1. Default (Base64 Encoded)
+When S3 is NOT configured and `COMFY_SKIP_BASE64` is `false` (default).
+
+```json
+{
+  "output": {
+    "images": [
+      {
+        "filename": "ComfyUI_00001_.png",
+        "subfolder": "",
+        "type": "base64",
+        "data": "iVBORw0KGgoAAAANSUhEUg..."
+      }
+    ]
+  }
+}
+```
+
+#### 2. S3 Upload
+When S3 is configured (via `BUCKET_ENDPOINT_URL` etc.).
+
+```json
+{
+  "output": {
+    "images": [
+      {
+        "filename": "ComfyUI_00001_.png",
+        "subfolder": "",
+        "type": "s3_url",
+        "data": "https://my-bucket.s3.amazonaws.com/job-id/ComfyUI_00001_.png"
+      }
+    ]
+  }
+}
+```
+
+#### 3. Local File Only (Skip Base64)
+When `COMFY_SKIP_BASE64=true` and S3 is NOT configured. Useful for network volumes.
+
+```json
+{
+  "output": {
+    "images": [
+      {
+        "filename": "ComfyUI_00001_.png",
+        "subfolder": "",
+        "type": "local_file"
+      }
+    ]
+  }
 }
 ```
 
@@ -135,11 +191,12 @@ Each object within the `input.images` array must contain:
 
 Each object in the `output.images` array has the following structure:
 
-| Field Name | Type   | Description                                                                                     |
-| ---------- | ------ | ----------------------------------------------------------------------------------------------- |
-| `filename` | String | The original filename assigned by ComfyUI during generation.                                    |
-| `type`     | String | Indicates the format of the data. Either `"base64"` or `"s3_url"` (if S3 upload is configured). |
-| `data`     | String | Contains either the base64 encoded image string or the S3 URL for the uploaded image file.      |
+| Field Name  | Type   | Description                                                                                              |
+| ----------- | ------ | -------------------------------------------------------------------------------------------------------- |
+| `filename`  | String | The original filename assigned by ComfyUI during generation.                                             |
+| `subfolder` | String | The subfolder where the image is stored.                                                                 |
+| `type`      | String | Indicates the format of the data. `base64`, `s3_url`, or `local_file` (if `COMFY_SKIP_BASE64` is set).   |
+| `data`      | String | Contains either the base64 encoded image string or the S3 URL. Omitted if `type` is `local_file`.        |
 
 > [!NOTE]
 > The `output.images` field provides a list of all generated images (excluding temporary ones).

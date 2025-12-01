@@ -734,6 +734,7 @@ def handler(job):
                                 output_data.append(
                                     {
                                         "filename": filename,
+                                        "subfolder": subfolder,
                                         "type": "s3_url",
                                         "data": s3_url,
                                     }
@@ -752,24 +753,36 @@ def handler(job):
                                             f"worker-comfyui - Error removing temp file {temp_file_path}: {rm_err}"
                                         )
                         else:
-                            # Return as base64 string
-                            try:
-                                base64_image = base64.b64encode(image_bytes).decode(
-                                    "utf-8"
-                                )
-                                # Append dictionary with filename and base64 data
+                            # Check if we should skip base64 encoding
+                            if os.environ.get("COMFY_SKIP_BASE64", "false").lower() == "true":
                                 output_data.append(
                                     {
                                         "filename": filename,
-                                        "type": "base64",
-                                        "data": base64_image,
+                                        "subfolder": subfolder,
+                                        "type": "local_file",
                                     }
                                 )
-                                print(f"worker-comfyui - Encoded {filename} as base64")
-                            except Exception as e:
-                                error_msg = f"Error encoding {filename} to base64: {e}"
-                                print(f"worker-comfyui - {error_msg}")
-                                errors.append(error_msg)
+                                print(f"worker-comfyui - Skipped base64 encoding for {filename}")
+                            else:
+                                # Return as base64 string
+                                try:
+                                    base64_image = base64.b64encode(image_bytes).decode(
+                                        "utf-8"
+                                    )
+                                    # Append dictionary with filename and base64 data
+                                    output_data.append(
+                                        {
+                                            "filename": filename,
+                                            "subfolder": subfolder,
+                                            "type": "base64",
+                                            "data": base64_image,
+                                        }
+                                    )
+                                    print(f"worker-comfyui - Encoded {filename} as base64")
+                                except Exception as e:
+                                    error_msg = f"Error encoding {filename} to base64: {e}"
+                                    print(f"worker-comfyui - {error_msg}")
+                                    errors.append(error_msg)
                     else:
                         error_msg = f"Failed to fetch image data for {filename} from /view endpoint."
                         errors.append(error_msg)
@@ -824,6 +837,7 @@ def handler(job):
                                 output_data.append(
                                     {
                                         "filename": filename,
+                                        "subfolder": subfolder,
                                         "type": "s3_url",
                                         "data": s3_url,
                                     }
@@ -842,24 +856,36 @@ def handler(job):
                                             f"worker-comfyui - Error removing temp file {temp_file_path}: {rm_err}"
                                         )
                         else:
-                            # Return as base64 string
-                            try:
-                                base64_gif = base64.b64encode(gif_bytes).decode(
-                                    "utf-8"
-                                )
-                                # Append dictionary with filename and base64 data
+                            # Check if we should skip base64 encoding
+                            if os.environ.get("COMFY_SKIP_BASE64", "false").lower() == "true":
                                 output_data.append(
                                     {
                                         "filename": filename,
-                                        "type": "base64",
-                                        "data": base64_gif,
+                                        "subfolder": subfolder,
+                                        "type": "local_file",
                                     }
                                 )
-                                print(f"worker-comfyui - Encoded {filename} as base64")
-                            except Exception as e:
-                                error_msg = f"Error encoding {filename} to base64: {e}"
-                                print(f"worker-comfyui - {error_msg}")
-                                errors.append(error_msg)
+                                print(f"worker-comfyui - Skipped base64 encoding for {filename}")
+                            else:
+                                # Return as base64 string
+                                try:
+                                    base64_gif = base64.b64encode(gif_bytes).decode(
+                                        "utf-8"
+                                    )
+                                    # Append dictionary with filename and base64 data
+                                    output_data.append(
+                                        {
+                                            "filename": filename,
+                                            "subfolder": subfolder,
+                                            "type": "base64",
+                                            "data": base64_gif,
+                                        }
+                                    )
+                                    print(f"worker-comfyui - Encoded {filename} as base64")
+                                except Exception as e:
+                                    error_msg = f"Error encoding {filename} to base64: {e}"
+                                    print(f"worker-comfyui - {error_msg}")
+                                    errors.append(error_msg)
                     else:
                         error_msg = f"Failed to fetch gif data for {filename} from /view endpoint."
                         errors.append(error_msg)

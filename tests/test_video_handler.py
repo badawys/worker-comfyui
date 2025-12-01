@@ -104,6 +104,7 @@ class TestVideoHandler(unittest.TestCase):
         self.assertIn("images", result)
         self.assertEqual(len(result["images"]), 1)
         self.assertEqual(result["images"][0]["filename"], "test_video.mp4")
+        self.assertEqual(result["images"][0]["subfolder"], "")
         self.assertEqual(result["images"][0]["type"], "base64")
         self.assertEqual(result["images"][0]["data"], base64.b64encode(b"fake-video-content").decode("utf-8"))
 
@@ -195,6 +196,7 @@ class TestVideoHandler(unittest.TestCase):
         self.assertIn("images", result)
         self.assertEqual(len(result["images"]), 1)
         self.assertEqual(result["images"][0]["filename"], "test_video.mp4")
+        self.assertEqual(result["images"][0]["subfolder"], "")
         self.assertEqual(result["images"][0]["type"], "s3_url")
         self.assertEqual(result["images"][0]["data"], "https://test-bucket-url/test-bucket/test-job-id/test_video.mp4")
 
@@ -210,6 +212,92 @@ class TestVideoHandler(unittest.TestCase):
         }) # bucket_creds
         self.assertEqual(kwargs["bucket_name"], "test-bucket")
         self.assertEqual(kwargs["prefix"], "test-job-id")
+
+    @patch.dict(os.environ, {
+        "COMFY_SKIP_BASE64": "true"
+    })
+    @patch('handler.rp_upload')
+    def test_handler_video_output_skip_base64(self, mock_rp_upload):
+        # Setup mocks
+        mock_uuid = MagicMock()
+        handler.uuid = mock_uuid
+        mock_uuid.uuid4.return_value = "test-uuid"
+
+        mock_requests = sys.modules['requests']
+        mock_websocket = sys.modules['websocket']
+        
+        # Mock ComfyUI server check
+        mock_requests.get.return_value.status_code = 200
+
+        # Mock WebSocket connection
+        mock_ws = MagicMock()
+        mock_websocket.WebSocket.return_value = mock_ws
+        
+        # Mock WebSocket messages
+        mock_ws.recv.side_effect = [
+            json.dumps({"type": "status", "data": {"status": {"exec_info": {"queue_remaining": 0}}}}),
+            json.dumps({"type": "executing", "data": {"node": None, "prompt_id": "test-prompt-id"}})
+        ]
+
+        # Mock queue_workflow response
+        mock_requests.post.return_value.status_code = 200
+        mock_requests.post.return_value.json.return_value = {"prompt_id": "test-prompt-id"}
+
+        # Mock history response with 'gifs'
+        mock_history_response = {
+            "test-prompt-id": {
+                "outputs": {
+                    "node-1": {
+                        "gifs": [
+                            {
+                                "filename": "test_video.mp4",
+                                "subfolder": "my_subfolder",
+                                "type": "output"
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        
+        # Mock get_history
+        def side_effect_get(url, timeout=None):
+            if "/history/" in url:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = mock_history_response
+                return mock_resp
+            elif "/view" in url:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.content = b"fake-video-content"
+                return mock_resp
+            else:
+                # Default for server check
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                return mock_resp
+
+        mock_requests.get.side_effect = side_effect_get
+
+        # Input job
+        job = {
+            "id": "test-job-id",
+            "input": {
+                "workflow": {"node": "data"}
+            }
+        }
+
+        # Run handler
+        result = handler.handler(job)
+
+        # Verify results
+        self.assertIn("images", result)
+        self.assertEqual(len(result["images"]), 1)
+        self.assertEqual(result["images"][0]["filename"], "test_video.mp4")
+        self.assertEqual(result["images"][0]["subfolder"], "my_subfolder")
+        self.assertEqual(result["images"][0]["type"], "local_file")
+        self.assertNotIn("data", result["images"][0])
 
 if __name__ == '__main__':
     unittest.main()
