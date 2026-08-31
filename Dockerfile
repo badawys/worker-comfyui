@@ -35,7 +35,7 @@ ENV PIP_NO_INPUT=1
 # =============================================================================
 
 RUN apt-get update \
-    && apt-get install -y \
+    && apt-get install -y --no-install-recommends \
         python3.12 \
         python3.12-venv \
         git \
@@ -48,8 +48,7 @@ RUN apt-get update \
         libxrender1 \
         ffmpeg \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
-    && apt-get autoremove -y \
-    && apt-get clean -y \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -98,12 +97,26 @@ RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
 
 # =============================================================================
 # Install ComfyUI Runtime Requirements
+#
+# Explicitly install ComfyUI requirements after comfy-cli installation.
+#
+# This ensures runtime dependencies such as:
+#
+# - SQLAlchemy
+# - Alembic
+# - aiohttp
+# - safetensors
+# - transformers
+# - other ComfyUI dependencies
+#
+# remain available even when ComfyUI adds new requirements.
 # =============================================================================
 
 RUN python -m pip install \
         --no-cache-dir \
         -r /comfyui/requirements.txt \
-    && python -c "import sqlalchemy, alembic; print('ComfyUI database dependencies OK')"
+    && python -c \
+        "import sqlalchemy, alembic; print('ComfyUI database dependencies OK')"
 
 
 # =============================================================================
@@ -118,6 +131,7 @@ RUN if [ "${ENABLE_PYTORCH_UPGRADE}" = "true" ]; then \
             torchaudio \
             --index-url "${PYTORCH_INDEX_URL}"; \
     fi
+
 
 # =============================================================================
 # Custom Nodes
@@ -173,18 +187,20 @@ RUN uv pip install \
 # =============================================================================
 # Model Downloader Stage
 #
-# IMPORTANT:
-#
-# This stage is kept separate from the final image.
-#
-# Changing handler.py / start.sh / other worker code will NOT trigger the
-# expensive model downloads again.
-#
-# Models:
+# Current production image:
 #
 #   Qwen Image Edit 2511
-#   WAN 2.2 I2V
 #
+# WAN is intentionally disabled for now.
+#
+# Keeping this stage separate means changes to:
+#
+# - handler.py
+# - start.sh
+# - helper scripts
+# - runtime dependencies
+#
+# do not need to re-download the Qwen models when Docker cache is available.
 # =============================================================================
 # =============================================================================
 
@@ -205,7 +221,7 @@ RUN uv pip install \
 
 
 # =============================================================================
-# Output Directories
+# Model Output / Temporary Directories
 # =============================================================================
 
 RUN mkdir -p \
@@ -215,28 +231,29 @@ RUN mkdir -p \
     /model-output/loras \
     /tmp/qwen-edit \
     /tmp/qwen-base \
-    /tmp/qwen-lora \
-    /tmp/wan21 \
-    /tmp/wan22
+    /tmp/qwen-lora
 
 
 # =============================================================================
-# Download Qwen 2511 + WAN
+# Download Qwen Image Edit 2511
 #
-# Downloads are performed in parallel.
+# Three independent Hugging Face jobs are started in parallel:
 #
-# No Hugging Face token is required because all model repositories used here
-# are public.
+# 1. Qwen Image Edit diffusion model
+# 2. Qwen text encoder + VAE
+# 3. Qwen Image Edit 2511 Lightning LoRA
+#
+# All repositories are public, so no Hugging Face token is required.
 # =============================================================================
 
 RUN --mount=type=cache,target=/root/.cache/huggingface \
     set -eu; \
     \
     echo "============================================================"; \
-    echo "Downloading Qwen Image Edit 2511 + WAN 2.2"; \
+    echo "Downloading Qwen Image Edit 2511"; \
     echo "============================================================"; \
     \
-    echo "[1/3] Qwen Image Edit 2511 diffusion model"; \
+    echo "[1/3] Starting Qwen Image Edit 2511 diffusion model..."; \
     hf download \
         Comfy-Org/Qwen-Image-Edit_ComfyUI \
         split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
@@ -245,7 +262,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen-edit.log 2>&1 \
         & PID_QWEN_EDIT=$!; \
     \
-    echo "[2/3] Qwen text encoder + VAE"; \
+    echo "[2/3] Starting Qwen text encoder + VAE..."; \
     hf download \
         Comfy-Org/Qwen-Image_ComfyUI \
         split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
@@ -255,7 +272,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen-base.log 2>&1 \
         & PID_QWEN_BASE=$!; \
     \
-    echo "[3/3] Qwen 2511 Lightning LoRA"; \
+    echo "[3/3] Starting Qwen 2511 Lightning LoRA..."; \
     hf download \
         lightx2v/Qwen-Image-Edit-2511-Lightning \
         Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
@@ -264,37 +281,20 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen-lora.log 2>&1 \
         & PID_QWEN_LORA=$!; \
     \
-    # echo "[4/5] WAN 2.1 VAE + text encoder"; \
-    # hf download \
-    #     Comfy-Org/Wan_2.1_ComfyUI_repackaged \
-    #     split_files/vae/wan_2.1_vae.safetensors \
-    #     split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
-    #     --local-dir /tmp/wan21 \
-    #     --max-workers 2 \
-    #     > /tmp/wan21.log 2>&1 \
-    #     & PID_WAN21=$!; \
-    # \
-    # echo "[5/5] WAN 2.2 diffusion models + Lightning LoRAs"; \
-    # hf download \
-    #     Comfy-Org/Wan_2.2_ComfyUI_Repackaged \
-    #     split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
-    #     split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
-    #     split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
-    #     split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
-    #     --local-dir /tmp/wan22 \
-    #     --max-workers 2 \
-    #     > /tmp/wan22.log 2>&1 \
-    #     & PID_WAN22=$!; \
-    # \
-    echo "Waiting for model downloads..."; \
+    echo ""; \
+    echo "All Qwen downloads started."; \
+    echo "Waiting for completion..."; \
+    echo ""; \
     \
     FAILED=0; \
     \
     if wait "${PID_QWEN_EDIT}"; then \
-        echo "[OK] Qwen Image Edit 2511"; \
+        echo "[OK] Qwen Image Edit 2511 diffusion model"; \
     else \
         STATUS=$?; \
+        echo "============================================================"; \
         echo "[ERROR] Qwen Image Edit 2511 failed: ${STATUS}"; \
+        echo "============================================================"; \
         cat /tmp/qwen-edit.log || true; \
         FAILED=1; \
     fi; \
@@ -303,46 +303,37 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         echo "[OK] Qwen text encoder + VAE"; \
     else \
         STATUS=$?; \
+        echo "============================================================"; \
         echo "[ERROR] Qwen text encoder / VAE failed: ${STATUS}"; \
+        echo "============================================================"; \
         cat /tmp/qwen-base.log || true; \
         FAILED=1; \
     fi; \
     \
     if wait "${PID_QWEN_LORA}"; then \
-        echo "[OK] Qwen Lightning LoRA"; \
+        echo "[OK] Qwen Image Edit 2511 Lightning LoRA"; \
     else \
         STATUS=$?; \
+        echo "============================================================"; \
         echo "[ERROR] Qwen Lightning LoRA failed: ${STATUS}"; \
+        echo "============================================================"; \
         cat /tmp/qwen-lora.log || true; \
         FAILED=1; \
     fi; \
     \
-    # if wait "${PID_WAN21}"; then \
-    #     echo "[OK] WAN 2.1 files"; \
-    # else \
-    #     STATUS=$?; \
-    #     echo "[ERROR] WAN 2.1 files failed: ${STATUS}"; \
-    #     cat /tmp/wan21.log || true; \
-    #     FAILED=1; \
-    # fi; \
-    # \
-    # if wait "${PID_WAN22}"; then \
-    #     echo "[OK] WAN 2.2 files"; \
-    # else \
-    #     STATUS=$?; \
-    #     echo "[ERROR] WAN 2.2 files failed: ${STATUS}"; \
-    #     cat /tmp/wan22.log || true; \
-    #     FAILED=1; \
-    # fi; \
-    # \
     if [ "${FAILED}" -ne 0 ]; then \
+        echo ""; \
         echo "============================================================"; \
-        echo "MODEL DOWNLOAD FAILED"; \
+        echo "ONE OR MORE MODEL DOWNLOADS FAILED"; \
         echo "============================================================"; \
         exit 1; \
     fi; \
     \
+    echo ""; \
+    echo "============================================================"; \
+    echo "All Qwen downloads completed."; \
     echo "Moving models into stable output directories..."; \
+    echo "============================================================"; \
     \
     mv \
         /tmp/qwen-edit/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
@@ -360,40 +351,22 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         /tmp/qwen-lora/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
         /model-output/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors; \
     \
-    # mv \
-    #     /tmp/wan21/split_files/vae/wan_2.1_vae.safetensors \
-    #     /model-output/vae/wan_2.1_vae.safetensors; \
-    # \
-    # mv \
-    #     /tmp/wan21/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
-    #     /model-output/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors; \
-    # \
-    # mv \
-    #     /tmp/wan22/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
-    #     /model-output/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors; \
-    # \
-    # mv \
-    #     /tmp/wan22/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
-    #     /model-output/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors; \
-    # \
-    # mv \
-    #     /tmp/wan22/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
-    #     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors; \
-    # \
-    # mv \
-    #     /tmp/wan22/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
-    #     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors; \
-    # \
     rm -rf \
         /tmp/qwen-edit \
         /tmp/qwen-base \
         /tmp/qwen-lora \
-        # /tmp/wan21 \
-        # /tmp/wan22 \
-        # /tmp/*.log; \
+        /tmp/qwen-edit.log \
+        /tmp/qwen-base.log \
+        /tmp/qwen-lora.log; \
     \
+    echo ""; \
     echo "============================================================"; \
-    echo "ALL MODELS READY"; \
+    echo "QWEN MODELS READY"; \
+    echo "============================================================"; \
+    echo "qwen_image_edit_2511_fp8mixed.safetensors"; \
+    echo "qwen_2.5_vl_7b_fp8_scaled.safetensors"; \
+    echo "qwen_image_vae.safetensors"; \
+    echo "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"; \
     echo "============================================================"
 
 
@@ -401,17 +374,14 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
 # =============================================================================
 # Final Production Image
 #
-# Important:
+# Large model COPY commands intentionally come before:
 #
-# Each major model is copied as a SEPARATE Docker layer.
+# - C compiler/runtime dependencies
+# - handler.py
+# - start.sh
+# - helper scripts
 #
-# Benefits:
-#
-# - Docker Hub can cache/deduplicate individual model layers.
-# - Future code-only releases do not rebuild these layers.
-# - RunPod can pull multiple layers concurrently.
-# - Changing one model doesn't invalidate every other model.
-#
+# This preserves Docker layer caching for the large model weights.
 # =============================================================================
 # =============================================================================
 
@@ -451,43 +421,78 @@ COPY --from=model-downloader \
 
 
 # =============================================================================
-# WAN
+# Runtime Build Tools
+#
+# Triton JIT compilation requires a C compiler at inference time.
+#
+# The NVIDIA CUDA runtime image intentionally does not contain GCC/G++.
+#
+# These tools are intentionally installed AFTER the model layers so this
+# runtime layer can change without invalidating the huge Qwen layers.
 # =============================================================================
 
-# COPY --from=model-downloader \
-#     /model-output/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
-#     /comfyui/models/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        python3.12-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# COPY --from=model-downloader \
-#     /model-output/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
-#     /comfyui/models/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors
+ENV CC=/usr/bin/gcc
+ENV CXX=/usr/bin/g++
 
-# COPY --from=model-downloader \
-#     /model-output/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
-#     /comfyui/models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors
 
-# COPY --from=model-downloader \
-#     /model-output/vae/wan_2.1_vae.safetensors \
-#     /comfyui/models/vae/wan_2.1_vae.safetensors
+# =============================================================================
+# Custom Node Runtime Dependencies
+#
+# Fixes:
+#
+# ComfyUI-VideoHelperSuite:
+#     ModuleNotFoundError: No module named 'cv2'
+#
+# ComfyUI-WanVideoWrapper:
+#     ModuleNotFoundError: No module named 'accelerate'
+#
+# OpenCV headless is used because this is a serverless environment.
+# =============================================================================
 
-# COPY --from=model-downloader \
-#     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
-#     /comfyui/models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors
+RUN uv pip install \
+    --no-cache-dir \
+    opencv-python-headless \
+    imageio-ffmpeg \
+    accelerate
 
-# COPY --from=model-downloader \
-#     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
-#     /comfyui/models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors
+
+# =============================================================================
+# Runtime Verification
+#
+# Fail the Docker build immediately if these important runtime dependencies
+# are not available.
+# =============================================================================
+
+RUN echo "============================================================" \
+    && echo "Verifying runtime dependencies..." \
+    && echo "============================================================" \
+    && gcc --version \
+    && g++ --version \
+    && python -c "import sqlalchemy; print('SQLAlchemy OK:', sqlalchemy.__version__)" \
+    && python -c "import alembic; print('Alembic OK:', alembic.__version__)" \
+    && python -c "import cv2; print('OpenCV OK:', cv2.__version__)" \
+    && python -c "import accelerate; print('Accelerate OK:', accelerate.__version__)" \
+    && python -c "import torch; print('PyTorch OK:', torch.__version__)" \
+    && python -c "import triton; print('Triton OK:', triton.__version__)" \
+    && echo "============================================================" \
+    && echo "Runtime dependency verification passed." \
+    && echo "============================================================"
 
 
 # =============================================================================
 # Worker Files
 #
-# KEEP THESE AFTER THE MODEL LAYERS.
+# Keep frequently changing application files at the end.
 #
-# This is intentional.
-#
-# Changing handler.py or start.sh should only invalidate these tiny final
-# layers, NOT the huge model layers above.
+# Updating handler.py or start.sh will therefore only invalidate these small
+# final layers.
 # =============================================================================
 
 WORKDIR /
@@ -513,6 +518,19 @@ COPY scripts/comfy-manager-set-mode.sh \
     /usr/local/bin/comfy-manager-set-mode
 
 RUN chmod +x /usr/local/bin/comfy-manager-set-mode
+
+
+# =============================================================================
+# Final Image Information
+# =============================================================================
+
+RUN echo "============================================================" \
+    && echo "worker-comfyui production image ready" \
+    && echo "Qwen Image Edit 2511: enabled" \
+    && echo "Triton runtime compiler: enabled" \
+    && echo "OpenCV: enabled" \
+    && echo "Accelerate: enabled" \
+    && echo "============================================================"
 
 
 # =============================================================================
