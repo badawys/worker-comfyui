@@ -6,7 +6,7 @@
 
 ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
-FROM ${BASE_IMAGE} AS base
+FROM ${BASE_IMAGE} AS comfy-base
 
 
 # =============================================================================
@@ -27,16 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_PREFER_BINARY=1
 ENV PYTHONUNBUFFERED=1
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
-
-# Hugging Face
-#
-# Default download timeout is much lower.
-# Large 10-20 GB model files benefit from a much larger timeout.
-ENV HF_HUB_DOWNLOAD_TIMEOUT=600
-ENV HF_HUB_ETAG_TIMEOUT=60
-
-# Do not waste time checking CLI versions during Docker builds.
-ENV HF_HUB_DISABLE_UPDATE_CHECK=1
+ENV PIP_NO_INPUT=1
 
 
 # =============================================================================
@@ -57,7 +48,6 @@ RUN apt-get update \
         libxrender1 \
         ffmpeg \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
-    && ln -sf /usr/bin/pip3 /usr/bin/pip \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
@@ -76,18 +66,14 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 
 # =============================================================================
-# Python Packages
-#
-# hf_xet is automatically used by huggingface_hub for Xet-backed repositories.
+# Comfy CLI
 # =============================================================================
 
 RUN uv pip install \
     comfy-cli \
     pip \
     setuptools \
-    wheel \
-    huggingface_hub \
-    hf_xet
+    wheel
 
 
 # =============================================================================
@@ -125,15 +111,6 @@ RUN if [ "${ENABLE_PYTORCH_UPGRADE}" = "true" ]; then \
 
 
 # =============================================================================
-# ComfyUI Configuration
-# =============================================================================
-
-WORKDIR /comfyui
-
-ADD src/extra_model_paths.yaml ./
-
-
-# =============================================================================
 # Custom Nodes
 # =============================================================================
 
@@ -155,24 +132,24 @@ RUN git clone \
 # =============================================================================
 
 RUN if [ -f ComfyUI_essentials/requirements.txt ]; then \
-        pip install \
+        uv pip install \
             --no-cache-dir \
             -r ComfyUI_essentials/requirements.txt; \
     fi \
     && if [ -f ComfyUI-VideoHelperSuite/requirements.txt ]; then \
-        pip install \
+        uv pip install \
             --no-cache-dir \
             -r ComfyUI-VideoHelperSuite/requirements.txt; \
     fi \
     && if [ -f ComfyUI-WanVideoWrapper/requirements.txt ]; then \
-        pip install \
+        uv pip install \
             --no-cache-dir \
             -r ComfyUI-WanVideoWrapper/requirements.txt; \
     fi
 
 
 # =============================================================================
-# Worker Runtime
+# RunPod Worker Runtime Dependencies
 # =============================================================================
 
 WORKDIR /
@@ -184,10 +161,331 @@ RUN uv pip install \
 
 
 # =============================================================================
-# Worker Files
+# =============================================================================
+# Model Downloader Stage
+#
+# IMPORTANT:
+#
+# This stage is kept separate from the final image.
+#
+# Changing handler.py / start.sh / other worker code will NOT trigger the
+# expensive model downloads again.
+#
+# Models:
+#
+#   Qwen Image Edit 2511
+#   WAN 2.2 I2V
+#
+# =============================================================================
 # =============================================================================
 
-ADD src/start.sh handler.py test_input.json ./
+FROM comfy-base AS model-downloader
+
+
+# =============================================================================
+# Hugging Face Downloader
+# =============================================================================
+
+ENV HF_HUB_DOWNLOAD_TIMEOUT=600
+ENV HF_HUB_ETAG_TIMEOUT=60
+ENV HF_HUB_DISABLE_UPDATE_CHECK=1
+
+RUN uv pip install \
+    huggingface_hub \
+    hf_xet
+
+
+# =============================================================================
+# Output Directories
+# =============================================================================
+
+RUN mkdir -p \
+    /model-output/unet \
+    /model-output/clip \
+    /model-output/vae \
+    /model-output/loras \
+    /tmp/qwen-edit \
+    /tmp/qwen-base \
+    /tmp/qwen-lora \
+    /tmp/wan21 \
+    /tmp/wan22
+
+
+# =============================================================================
+# Download Qwen 2511 + WAN
+#
+# Downloads are performed in parallel.
+#
+# No Hugging Face token is required because all model repositories used here
+# are public.
+# =============================================================================
+
+RUN --mount=type=cache,target=/root/.cache/huggingface \
+    set -eu; \
+    \
+    echo "============================================================"; \
+    echo "Downloading Qwen Image Edit 2511 + WAN 2.2"; \
+    echo "============================================================"; \
+    \
+    echo "[1/3] Qwen Image Edit 2511 diffusion model"; \
+    hf download \
+        Comfy-Org/Qwen-Image-Edit_ComfyUI \
+        split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
+        --local-dir /tmp/qwen-edit \
+        --max-workers 2 \
+        > /tmp/qwen-edit.log 2>&1 \
+        & PID_QWEN_EDIT=$!; \
+    \
+    echo "[2/3] Qwen text encoder + VAE"; \
+    hf download \
+        Comfy-Org/Qwen-Image_ComfyUI \
+        split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
+        split_files/vae/qwen_image_vae.safetensors \
+        --local-dir /tmp/qwen-base \
+        --max-workers 2 \
+        > /tmp/qwen-base.log 2>&1 \
+        & PID_QWEN_BASE=$!; \
+    \
+    echo "[3/3] Qwen 2511 Lightning LoRA"; \
+    hf download \
+        lightx2v/Qwen-Image-Edit-2511-Lightning \
+        Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
+        --local-dir /tmp/qwen-lora \
+        --max-workers 2 \
+        > /tmp/qwen-lora.log 2>&1 \
+        & PID_QWEN_LORA=$!; \
+    \
+    # echo "[4/5] WAN 2.1 VAE + text encoder"; \
+    # hf download \
+    #     Comfy-Org/Wan_2.1_ComfyUI_repackaged \
+    #     split_files/vae/wan_2.1_vae.safetensors \
+    #     split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+    #     --local-dir /tmp/wan21 \
+    #     --max-workers 2 \
+    #     > /tmp/wan21.log 2>&1 \
+    #     & PID_WAN21=$!; \
+    # \
+    # echo "[5/5] WAN 2.2 diffusion models + Lightning LoRAs"; \
+    # hf download \
+    #     Comfy-Org/Wan_2.2_ComfyUI_Repackaged \
+    #     split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
+    #     split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
+    #     split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
+    #     split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
+    #     --local-dir /tmp/wan22 \
+    #     --max-workers 2 \
+    #     > /tmp/wan22.log 2>&1 \
+    #     & PID_WAN22=$!; \
+    # \
+    echo "Waiting for model downloads..."; \
+    \
+    FAILED=0; \
+    \
+    if wait "${PID_QWEN_EDIT}"; then \
+        echo "[OK] Qwen Image Edit 2511"; \
+    else \
+        STATUS=$?; \
+        echo "[ERROR] Qwen Image Edit 2511 failed: ${STATUS}"; \
+        cat /tmp/qwen-edit.log || true; \
+        FAILED=1; \
+    fi; \
+    \
+    if wait "${PID_QWEN_BASE}"; then \
+        echo "[OK] Qwen text encoder + VAE"; \
+    else \
+        STATUS=$?; \
+        echo "[ERROR] Qwen text encoder / VAE failed: ${STATUS}"; \
+        cat /tmp/qwen-base.log || true; \
+        FAILED=1; \
+    fi; \
+    \
+    if wait "${PID_QWEN_LORA}"; then \
+        echo "[OK] Qwen Lightning LoRA"; \
+    else \
+        STATUS=$?; \
+        echo "[ERROR] Qwen Lightning LoRA failed: ${STATUS}"; \
+        cat /tmp/qwen-lora.log || true; \
+        FAILED=1; \
+    fi; \
+    \
+    # if wait "${PID_WAN21}"; then \
+    #     echo "[OK] WAN 2.1 files"; \
+    # else \
+    #     STATUS=$?; \
+    #     echo "[ERROR] WAN 2.1 files failed: ${STATUS}"; \
+    #     cat /tmp/wan21.log || true; \
+    #     FAILED=1; \
+    # fi; \
+    # \
+    # if wait "${PID_WAN22}"; then \
+    #     echo "[OK] WAN 2.2 files"; \
+    # else \
+    #     STATUS=$?; \
+    #     echo "[ERROR] WAN 2.2 files failed: ${STATUS}"; \
+    #     cat /tmp/wan22.log || true; \
+    #     FAILED=1; \
+    # fi; \
+    # \
+    if [ "${FAILED}" -ne 0 ]; then \
+        echo "============================================================"; \
+        echo "MODEL DOWNLOAD FAILED"; \
+        echo "============================================================"; \
+        exit 1; \
+    fi; \
+    \
+    echo "Moving models into stable output directories..."; \
+    \
+    mv \
+        /tmp/qwen-edit/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
+        /model-output/unet/qwen_image_edit_2511_fp8mixed.safetensors; \
+    \
+    mv \
+        /tmp/qwen-base/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
+        /model-output/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors; \
+    \
+    mv \
+        /tmp/qwen-base/split_files/vae/qwen_image_vae.safetensors \
+        /model-output/vae/qwen_image_vae.safetensors; \
+    \
+    mv \
+        /tmp/qwen-lora/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
+        /model-output/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors; \
+    \
+    # mv \
+    #     /tmp/wan21/split_files/vae/wan_2.1_vae.safetensors \
+    #     /model-output/vae/wan_2.1_vae.safetensors; \
+    # \
+    # mv \
+    #     /tmp/wan21/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+    #     /model-output/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors; \
+    # \
+    # mv \
+    #     /tmp/wan22/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
+    #     /model-output/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors; \
+    # \
+    # mv \
+    #     /tmp/wan22/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
+    #     /model-output/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors; \
+    # \
+    # mv \
+    #     /tmp/wan22/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
+    #     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors; \
+    # \
+    # mv \
+    #     /tmp/wan22/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
+    #     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors; \
+    # \
+    rm -rf \
+        /tmp/qwen-edit \
+        /tmp/qwen-base \
+        /tmp/qwen-lora \
+        # /tmp/wan21 \
+        # /tmp/wan22 \
+        # /tmp/*.log; \
+    \
+    echo "============================================================"; \
+    echo "ALL MODELS READY"; \
+    echo "============================================================"
+
+
+# =============================================================================
+# =============================================================================
+# Final Production Image
+#
+# Important:
+#
+# Each major model is copied as a SEPARATE Docker layer.
+#
+# Benefits:
+#
+# - Docker Hub can cache/deduplicate individual model layers.
+# - Future code-only releases do not rebuild these layers.
+# - RunPod can pull multiple layers concurrently.
+# - Changing one model doesn't invalidate every other model.
+#
+# =============================================================================
+# =============================================================================
+
+FROM comfy-base AS final
+
+
+# =============================================================================
+# Standard ComfyUI Model Directories
+# =============================================================================
+
+RUN mkdir -p \
+    /comfyui/models/unet \
+    /comfyui/models/clip \
+    /comfyui/models/vae \
+    /comfyui/models/loras
+
+
+# =============================================================================
+# Qwen Image Edit 2511
+# =============================================================================
+
+COPY --from=model-downloader \
+    /model-output/unet/qwen_image_edit_2511_fp8mixed.safetensors \
+    /comfyui/models/unet/qwen_image_edit_2511_fp8mixed.safetensors
+
+COPY --from=model-downloader \
+    /model-output/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors \
+    /comfyui/models/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors
+
+COPY --from=model-downloader \
+    /model-output/vae/qwen_image_vae.safetensors \
+    /comfyui/models/vae/qwen_image_vae.safetensors
+
+COPY --from=model-downloader \
+    /model-output/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
+    /comfyui/models/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+
+
+# =============================================================================
+# WAN
+# =============================================================================
+
+# COPY --from=model-downloader \
+#     /model-output/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
+#     /comfyui/models/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors
+
+# COPY --from=model-downloader \
+#     /model-output/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
+#     /comfyui/models/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors
+
+# COPY --from=model-downloader \
+#     /model-output/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+#     /comfyui/models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+
+# COPY --from=model-downloader \
+#     /model-output/vae/wan_2.1_vae.safetensors \
+#     /comfyui/models/vae/wan_2.1_vae.safetensors
+
+# COPY --from=model-downloader \
+#     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
+#     /comfyui/models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors
+
+# COPY --from=model-downloader \
+#     /model-output/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
+#     /comfyui/models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors
+
+
+# =============================================================================
+# Worker Files
+#
+# KEEP THESE AFTER THE MODEL LAYERS.
+#
+# This is intentional.
+#
+# Changing handler.py or start.sh should only invalidate these tiny final
+# layers, NOT the huge model layers above.
+# =============================================================================
+
+WORKDIR /
+
+COPY src/start.sh /start.sh
+COPY handler.py /handler.py
+COPY test_input.json /test_input.json
 
 RUN chmod +x /start.sh
 
@@ -202,9 +500,6 @@ COPY scripts/comfy-node-install.sh \
 RUN chmod +x /usr/local/bin/comfy-node-install
 
 
-ENV PIP_NO_INPUT=1
-
-
 COPY scripts/comfy-manager-set-mode.sh \
     /usr/local/bin/comfy-manager-set-mode
 
@@ -212,311 +507,9 @@ RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
 
 # =============================================================================
-# Default Command
+# Start
 # =============================================================================
+
+WORKDIR /
 
 CMD ["/start.sh"]
-
-
-# =============================================================================
-# =============================================================================
-# Model Downloader
-#
-# The worker always includes:
-#
-#   1. Qwen Image Edit 2511
-#   2. Qwen 2511 Lightning 4-step LoRA
-#   3. WAN 2.1 VAE / text encoder
-#   4. WAN 2.2 I2V high + low noise models
-#   5. WAN 2.2 Lightning LoRAs
-#
-# SDXL, SD3 and Flux are intentionally not included.
-# =============================================================================
-# =============================================================================
-
-FROM base AS downloader
-
-WORKDIR /comfyui
-
-
-# =============================================================================
-# Model Directories
-# =============================================================================
-
-RUN mkdir -p \
-    models/checkpoints \
-    models/vae \
-    models/unet \
-    models/clip \
-    models/loras
-
-
-# =============================================================================
-# Download Qwen + WAN
-#
-# We use five parallel jobs rather than ten separate downloads.
-#
-# Individual repositories containing multiple files use --max-workers.
-#
-# This provides:
-#
-# - parallel downloads
-# - Xet acceleration
-# - fewer processes
-# - better error reporting
-# - no Hugging Face token dependency
-# - less temporary disk usage
-# =============================================================================
-
-RUN set -eu; \
-    \
-    echo "============================================================"; \
-    echo "Downloading ComfyUI models"; \
-    echo "Qwen Image Edit 2511 + WAN 2.2"; \
-    echo "============================================================"; \
-    \
-    \
-    mkdir -p \
-        /tmp/qwen-edit \
-        /tmp/qwen-base \
-        /tmp/qwen-lora \
-        /tmp/wan21 \
-        /tmp/wan22; \
-    \
-    \
-    echo ""; \
-    echo "[1/5] Starting Qwen Image Edit 2511 diffusion model..."; \
-    \
-    hf download \
-        Comfy-Org/Qwen-Image-Edit_ComfyUI \
-        split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
-        --local-dir /tmp/qwen-edit \
-        --max-workers 2 \
-        > /tmp/qwen-edit.log 2>&1 \
-        & PID_QWEN_EDIT=$!; \
-    \
-    \
-    echo "[2/5] Starting Qwen text encoder + VAE..."; \
-    \
-    hf download \
-        Comfy-Org/Qwen-Image_ComfyUI \
-        split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
-        split_files/vae/qwen_image_vae.safetensors \
-        --local-dir /tmp/qwen-base \
-        --max-workers 2 \
-        > /tmp/qwen-base.log 2>&1 \
-        & PID_QWEN_BASE=$!; \
-    \
-    \
-    echo "[3/5] Starting Qwen 2511 Lightning LoRA..."; \
-    \
-    hf download \
-        lightx2v/Qwen-Image-Edit-2511-Lightning \
-        Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
-        --local-dir /tmp/qwen-lora \
-        --max-workers 2 \
-        > /tmp/qwen-lora.log 2>&1 \
-        & PID_QWEN_LORA=$!; \
-    \
-    \
-    echo "[4/5] Starting WAN 2.1 VAE + text encoder..."; \
-    \
-    hf download \
-        Comfy-Org/Wan_2.1_ComfyUI_repackaged \
-        split_files/vae/wan_2.1_vae.safetensors \
-        split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
-        --local-dir /tmp/wan21 \
-        --max-workers 2 \
-        > /tmp/wan21.log 2>&1 \
-        & PID_WAN21=$!; \
-    \
-    \
-    echo "[5/5] Starting WAN 2.2 models + LoRAs..."; \
-    \
-    hf download \
-        Comfy-Org/Wan_2.2_ComfyUI_Repackaged \
-        split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
-        split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
-        split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
-        split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
-        --local-dir /tmp/wan22 \
-        --max-workers 2 \
-        > /tmp/wan22.log 2>&1 \
-        & PID_WAN22=$!; \
-    \
-    \
-    echo ""; \
-    echo "All download jobs started."; \
-    echo "Waiting for completion..."; \
-    echo ""; \
-    \
-    \
-    FAILED=0; \
-    \
-    \
-    if wait "${PID_QWEN_EDIT}"; then \
-        echo "[OK] Qwen Image Edit 2511"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] Qwen Image Edit 2511 failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/qwen-edit.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    \
-    if wait "${PID_QWEN_BASE}"; then \
-        echo "[OK] Qwen text encoder + VAE"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] Qwen text encoder / VAE failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/qwen-base.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    \
-    if wait "${PID_QWEN_LORA}"; then \
-        echo "[OK] Qwen Lightning LoRA"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] Qwen Lightning LoRA failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/qwen-lora.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    \
-    if wait "${PID_WAN21}"; then \
-        echo "[OK] WAN 2.1 VAE + text encoder"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] WAN 2.1 files failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/wan21.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    \
-    if wait "${PID_WAN22}"; then \
-        echo "[OK] WAN 2.2 models + LoRAs"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] WAN 2.2 files failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/wan22.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    \
-    if [ "${FAILED}" -ne 0 ]; then \
-        echo ""; \
-        echo "============================================================"; \
-        echo "ONE OR MORE MODEL DOWNLOADS FAILED"; \
-        echo "See the error output above."; \
-        echo "============================================================"; \
-        exit 1; \
-    fi; \
-    \
-    \
-    echo ""; \
-    echo "============================================================"; \
-    echo "All downloads completed successfully."; \
-    echo "Moving models into ComfyUI..."; \
-    echo "============================================================"; \
-    \
-    \
-    mv \
-        /tmp/qwen-edit/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
-        models/unet/qwen_image_edit_2511_fp8mixed.safetensors; \
-    \
-    \
-    mv \
-        /tmp/qwen-base/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
-        models/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors; \
-    \
-    \
-    mv \
-        /tmp/qwen-base/split_files/vae/qwen_image_vae.safetensors \
-        models/vae/qwen_image_vae.safetensors; \
-    \
-    \
-    mv \
-        /tmp/qwen-lora/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
-        models/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors; \
-    \
-    \
-    mv \
-        /tmp/wan21/split_files/vae/wan_2.1_vae.safetensors \
-        models/vae/wan_2.1_vae.safetensors; \
-    \
-    \
-    mv \
-        /tmp/wan21/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
-        models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors; \
-    \
-    \
-    mv \
-        /tmp/wan22/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
-        models/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors; \
-    \
-    \
-    mv \
-        /tmp/wan22/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
-        models/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors; \
-    \
-    \
-    mv \
-        /tmp/wan22/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
-        models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors; \
-    \
-    \
-    mv \
-        /tmp/wan22/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
-        models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors; \
-    \
-    \
-    rm -rf \
-        /tmp/qwen-edit \
-        /tmp/qwen-base \
-        /tmp/qwen-lora \
-        /tmp/wan21 \
-        /tmp/wan22 \
-        /tmp/*.log; \
-    \
-    \
-    echo ""; \
-    echo "============================================================"; \
-    echo "MODEL INSTALLATION COMPLETED"; \
-    echo "============================================================"; \
-    echo ""; \
-    echo "Qwen:"; \
-    echo "  qwen_image_edit_2511_fp8mixed.safetensors"; \
-    echo "  qwen_2.5_vl_7b_fp8_scaled.safetensors"; \
-    echo "  qwen_image_vae.safetensors"; \
-    echo "  Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"; \
-    echo ""; \
-    echo "WAN:"; \
-    echo "  wan_2.1_vae.safetensors"; \
-    echo "  umt5_xxl_fp8_e4m3fn_scaled.safetensors"; \
-    echo "  wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"; \
-    echo "  wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"; \
-    echo "  wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"; \
-    echo "  wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"; \
-    echo "============================================================"
-
-
-# =============================================================================
-# Final Image
-# =============================================================================
-
-FROM base AS final
-
-COPY --from=downloader \
-    /comfyui/models \
-    /comfyui/models
