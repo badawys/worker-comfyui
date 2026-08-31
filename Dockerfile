@@ -97,6 +97,16 @@ RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
 
 
 # =============================================================================
+# Install ComfyUI Runtime Requirements
+# =============================================================================
+
+RUN python -m pip install \
+        --no-cache-dir \
+        -r /comfyui/requirements.txt \
+    && python -c "import sqlalchemy, alembic; print('ComfyUI database dependencies OK')"
+
+
+# =============================================================================
 # Optional PyTorch Upgrade
 # =============================================================================
 
@@ -108,7 +118,6 @@ RUN if [ "${ENABLE_PYTORCH_UPGRADE}" = "true" ]; then \
             torchaudio \
             --index-url "${PYTORCH_INDEX_URL}"; \
     fi
-
 
 # =============================================================================
 # Custom Nodes
