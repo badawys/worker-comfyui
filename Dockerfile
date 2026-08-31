@@ -12,10 +12,13 @@ ARG PYTORCH_INDEX_URL
 
 # Prevents prompts from packages asking for user input during installation
 ENV DEBIAN_FRONTEND=noninteractive
+
 # Prefer binary wheels over source distributions for faster pip installations
 ENV PIP_PREFER_BINARY=1
+
 # Ensures output from python is printed immediately to the terminal without buffering
 ENV PYTHONUNBUFFERED=1
+
 # Speed up some cmake builds
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 
@@ -35,7 +38,9 @@ RUN apt-get update && apt-get install -y \
     && ln -sf /usr/bin/pip3 /usr/bin/pip
 
 # Clean up to reduce image size
-RUN apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get autoremove -y \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install uv (latest) using official installer and create isolated venv
 RUN wget -qO- https://astral.sh/uv/install.sh | sh \
@@ -51,14 +56,28 @@ RUN uv pip install comfy-cli pip setuptools wheel
 
 # Install ComfyUI
 RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
-      /usr/bin/yes | comfy --workspace /comfyui install --version "${COMFYUI_VERSION}" --cuda-version "${CUDA_VERSION_FOR_COMFY}" --nvidia; \
+      /usr/bin/yes | comfy \
+        --workspace /comfyui \
+        install \
+        --version "${COMFYUI_VERSION}" \
+        --cuda-version "${CUDA_VERSION_FOR_COMFY}" \
+        --nvidia; \
     else \
-      /usr/bin/yes | comfy --workspace /comfyui install --version "${COMFYUI_VERSION}" --nvidia; \
+      /usr/bin/yes | comfy \
+        --workspace /comfyui \
+        install \
+        --version "${COMFYUI_VERSION}" \
+        --nvidia; \
     fi
 
 # Upgrade PyTorch if needed (for newer CUDA versions)
 RUN if [ "$ENABLE_PYTORCH_UPGRADE" = "true" ]; then \
-      uv pip install --force-reinstall torch torchvision torchaudio --index-url ${PYTORCH_INDEX_URL}; \
+      uv pip install \
+        --force-reinstall \
+        torch \
+        torchvision \
+        torchaudio \
+        --index-url ${PYTORCH_INDEX_URL}; \
     fi
 
 # Change working directory to ComfyUI
@@ -69,6 +88,7 @@ ADD src/extra_model_paths.yaml ./
 
 # Install Custom Nodes
 WORKDIR /comfyui/custom_nodes
+
 RUN git clone https://github.com/cubiq/ComfyUI_essentials.git \
     && git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
     && git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git
@@ -86,10 +106,12 @@ RUN uv pip install runpod requests websocket-client
 
 # Add application code and scripts
 ADD src/start.sh handler.py test_input.json ./
+
 RUN chmod +x /start.sh
 
 # Add script to install custom nodes
 COPY scripts/comfy-node-install.sh /usr/local/bin/comfy-node-install
+
 RUN chmod +x /usr/local/bin/comfy-node-install
 
 # Prevent pip from asking for confirmation during uninstall steps in custom nodes
@@ -97,15 +119,21 @@ ENV PIP_NO_INPUT=1
 
 # Copy helper script to switch Manager network mode at container start
 COPY scripts/comfy-manager-set-mode.sh /usr/local/bin/comfy-manager-set-mode
+
 RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
 # Set the default command to run when starting the container
 CMD ["/start.sh"]
 
+
+# =============================================================================
 # Stage 2: Download models
+# =============================================================================
+
 FROM base AS downloader
 
 ARG HUGGINGFACE_ACCESS_TOKEN
+
 # Set default model type if none is provided
 ARG MODEL_TYPE=default
 
@@ -113,52 +141,86 @@ ARG MODEL_TYPE=default
 WORKDIR /comfyui
 
 # Create necessary directories upfront
-RUN mkdir -p models/checkpoints models/vae models/unet models/clip models/loras
+RUN mkdir -p \
+    models/checkpoints \
+    models/vae \
+    models/unet \
+    models/clip \
+    models/loras
 
-# Download checkpoints/vae/unet/clip models to include in image based on model type
+
+# =============================================================================
+# Default Models
+#
+# Includes:
+# - WAN 2.1 / 2.2
+# - Qwen Image Edit 2511
+# =============================================================================
+
 RUN if [ "$MODEL_TYPE" = "default" ]; then \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/vae/wan_2.1_vae.safetensors "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/unet/qwen_image_edit_2509_fp8_e4m3fn.safetensors "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/vae/qwen_image_vae.safetensors "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors?download=true" && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/loras/Qwen-Image-Lightning-4steps-V1.0-bf16.safetensors "https://huggingface.co/lightx2v/Qwen-Image-Lightning/resolve/main/Qwen-Image-Lightning-4steps-V1.0-bf16.safetensors?download=true"; \
+\
+      echo "Downloading WAN and Qwen Image Edit 2511 models..." && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/vae/wan_2.1_vae.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/clip/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/unet/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/unet/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors?download=true" && \
+\
+      echo "Downloading Qwen Image Edit 2511..." && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/unet/qwen_image_edit_2511_fp8mixed.safetensors \
+        "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors \
+        "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/vae/qwen_image_vae.safetensors \
+        "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors?download=true" && \
+\
+      wget -q \
+        --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" \
+        -O models/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
+        "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors?download=true" && \
+\
+      echo "Default models downloaded successfully."; \
     fi
 
-RUN if [ "$MODEL_TYPE" = "sdxl" ]; then \
-      wget -q -O models/checkpoints/sd_xl_base_1.0.safetensors https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors && \
-      wget -q -O models/vae/sdxl_vae.safetensors https://huggingface.co/stabilityai/sdxl-vae/resolve/main/sdxl_vae.safetensors && \
-      wget -q -O models/vae/sdxl-vae-fp16-fix.safetensors https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/resolve/main/sdxl_vae.safetensors; \
-    fi
-
-RUN if [ "$MODEL_TYPE" = "sd3" ]; then \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/checkpoints/sd3_medium_incl_clips_t5xxlfp8.safetensors https://huggingface.co/stabilityai/stable-diffusion-3-medium/resolve/main/sd3_medium_incl_clips_t5xxlfp8.safetensors; \
-    fi
-
-RUN if [ "$MODEL_TYPE" = "flux1-schnell" ]; then \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/unet/flux1-schnell.safetensors https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/flux1-schnell.safetensors && \
-      wget -q -O models/clip/clip_l.safetensors https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors && \
-      wget -q -O models/clip/t5xxl_fp8_e4m3fn.safetensors https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/vae/ae.safetensors https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/ae.safetensors; \
-    fi
-
-RUN if [ "$MODEL_TYPE" = "flux1-dev" ]; then \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/unet/flux1-dev.safetensors https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main/flux1-dev.safetensors && \
-      wget -q -O models/clip/clip_l.safetensors https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors && \
-      wget -q -O models/clip/t5xxl_fp8_e4m3fn.safetensors https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors && \
-      wget -q --header="Authorization: Bearer ${HUGGINGFACE_ACCESS_TOKEN}" -O models/vae/ae.safetensors https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main/ae.safetensors; \
-    fi
-
-RUN if [ "$MODEL_TYPE" = "flux1-dev-fp8" ]; then \
-      wget -q -O models/checkpoints/flux1-dev-fp8.safetensors https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/flux1-dev-fp8.safetensors; \
-    fi
-
+# =============================================================================
 # Stage 3: Final image
+# =============================================================================
+
 FROM base AS final
 
-# Copy models from stage 2 to the final image
+# Copy models from downloader stage to final image
 COPY --from=downloader /comfyui/models /comfyui/models
