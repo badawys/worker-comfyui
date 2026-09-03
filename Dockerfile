@@ -4,7 +4,7 @@
 # Base Image
 # =============================================================================
 
-ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+ARG BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 FROM ${BASE_IMAGE} AS comfy-base
 
@@ -13,10 +13,10 @@ FROM ${BASE_IMAGE} AS comfy-base
 # Build Arguments
 # =============================================================================
 
-ARG COMFYUI_VERSION=latest
-ARG CUDA_VERSION_FOR_COMFY
+ARG COMFYUI_VERSION=0.34.0
+ARG CUDA_VERSION_FOR_COMFY=12.8
 ARG ENABLE_PYTORCH_UPGRADE=false
-ARG PYTORCH_INDEX_URL
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 
 
 # =============================================================================
@@ -41,12 +41,6 @@ RUN apt-get update \
         git \
         wget \
         curl \
-        libgl1 \
-        libglib2.0-0 \
-        libsm6 \
-        libxext6 \
-        libxrender1 \
-        ffmpeg \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -85,38 +79,45 @@ RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
             install \
             --version "${COMFYUI_VERSION}" \
             --cuda-version "${CUDA_VERSION_FOR_COMFY}" \
+            --skip-manager \
             --nvidia; \
     else \
         /usr/bin/yes | comfy \
             --workspace /comfyui \
             install \
             --version "${COMFYUI_VERSION}" \
+            --skip-manager \
             --nvidia; \
     fi
 
 
 # =============================================================================
-# Install ComfyUI Runtime Requirements
+# Verify ComfyUI / PyTorch Runtime
 #
-# Explicitly install ComfyUI requirements after comfy-cli installation.
+# comfy-cli already installs ComfyUI requirements, including the CUDA-specific
+# PyTorch wheel selected by --cuda-version above.
 #
-# This ensures runtime dependencies such as:
-#
-# - SQLAlchemy
-# - Alembic
-# - aiohttp
-# - safetensors
-# - transformers
-# - other ComfyUI dependencies
-#
-# remain available even when ComfyUI adds new requirements.
+# Do NOT run a second plain "pip install -r /comfyui/requirements.txt" here.
+# ComfyUI requirements contain unpinned torch/torchvision/torchaudio, so a
+# second install from default PyPI can replace the compatible cu128 build with
+# a newer CUDA build that the RunPod host driver cannot initialize.
 # =============================================================================
 
-RUN python -m pip install \
-        --no-cache-dir \
-        -r /comfyui/requirements.txt \
-    && python -c \
-        "import sqlalchemy, alembic; print('ComfyUI database dependencies OK')"
+RUN python - <<'PY'
+import alembic
+import sqlalchemy
+import torch
+
+print("SQLAlchemy OK:", sqlalchemy.__version__)
+print("Alembic OK:", alembic.__version__)
+print("PyTorch:", torch.__version__)
+print("PyTorch CUDA runtime:", torch.version.cuda)
+
+if torch.version.cuda != "12.8":
+    raise SystemExit(
+        f"Expected a CUDA 12.8 PyTorch build, got torch.version.cuda={torch.version.cuda!r}"
+    )
+PY
 
 
 # =============================================================================
@@ -124,51 +125,28 @@ RUN python -m pip install \
 # =============================================================================
 
 RUN if [ "${ENABLE_PYTORCH_UPGRADE}" = "true" ]; then \
+        if [ -z "${PYTORCH_INDEX_URL}" ]; then \
+            echo "PYTORCH_INDEX_URL must be set when ENABLE_PYTORCH_UPGRADE=true" >&2; \
+            exit 1; \
+        fi; \
         uv pip install \
             --force-reinstall \
             torch \
             torchvision \
             torchaudio \
             --index-url "${PYTORCH_INDEX_URL}"; \
+        python -c "import torch; print('Upgraded PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda)"; \
     fi
 
 
 # =============================================================================
 # Custom Nodes
 # =============================================================================
-
-WORKDIR /comfyui/custom_nodes
-
-RUN git clone \
-        --depth 1 \
-        https://github.com/cubiq/ComfyUI_essentials.git \
-    && git clone \
-        --depth 1 \
-        https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
-    && git clone \
-        --depth 1 \
-        https://github.com/kijai/ComfyUI-WanVideoWrapper.git
-
-
-# =============================================================================
-# Custom Node Requirements
-# =============================================================================
-
-RUN if [ -f ComfyUI_essentials/requirements.txt ]; then \
-        uv pip install \
-            --no-cache-dir \
-            -r ComfyUI_essentials/requirements.txt; \
-    fi \
-    && if [ -f ComfyUI-VideoHelperSuite/requirements.txt ]; then \
-        uv pip install \
-            --no-cache-dir \
-            -r ComfyUI-VideoHelperSuite/requirements.txt; \
-    fi \
-    && if [ -f ComfyUI-WanVideoWrapper/requirements.txt ]; then \
-        uv pip install \
-            --no-cache-dir \
-            -r ComfyUI-WanVideoWrapper/requirements.txt; \
-    fi
+#
+# None required for the production Qwen Image Edit workflow. The required
+# Qwen/CFG/resize/reference-latent nodes are provided by ComfyUI core.
+# Keeping the image worker core-only reduces image size, dependency loading,
+# custom-node import time, and cold-start risk.
 
 
 # =============================================================================
@@ -191,7 +169,6 @@ RUN uv pip install \
 #
 #   Qwen Image Edit 2511 FP8 + Lightning 8-step + NSFW LoRA
 #
-# WAN is intentionally disabled for now.
 #
 # Keeping this stage separate means changes to:
 #
@@ -293,8 +270,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         & PID_QWEN_NSFW=$!; \
     \
     echo ""; \
-    echo "All Qwen downloads started."; \
-    echo "Waiting for completion..."; \
+    echo "All Qwen downloads started. Waiting for completion..."; \
     echo ""; \
     \
     FAILED=0; \
@@ -303,9 +279,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         echo "[OK] Qwen Image Edit 2511 FP8 diffusion model"; \
     else \
         STATUS=$?; \
-        echo "============================================================"; \
         echo "[ERROR] Qwen Image Edit 2511 failed: ${STATUS}"; \
-        echo "============================================================"; \
         cat /tmp/qwen-edit.log || true; \
         FAILED=1; \
     fi; \
@@ -314,9 +288,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         echo "[OK] Qwen text encoder + VAE"; \
     else \
         STATUS=$?; \
-        echo "============================================================"; \
         echo "[ERROR] Qwen text encoder / VAE failed: ${STATUS}"; \
-        echo "============================================================"; \
         cat /tmp/qwen-base.log || true; \
         FAILED=1; \
     fi; \
@@ -325,9 +297,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         echo "[OK] Qwen Image Edit 2511 Lightning 8-step LoRA"; \
     else \
         STATUS=$?; \
-        echo "============================================================"; \
         echo "[ERROR] Qwen Lightning 8-step LoRA failed: ${STATUS}"; \
-        echo "============================================================"; \
         cat /tmp/qwen-lightning.log || true; \
         FAILED=1; \
     fi; \
@@ -336,43 +306,31 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         echo "[OK] Qwen Image Edit 2511 NSFW LoRA"; \
     else \
         STATUS=$?; \
-        echo "============================================================"; \
         echo "[ERROR] Qwen NSFW LoRA failed: ${STATUS}"; \
-        echo "============================================================"; \
         cat /tmp/qwen-nsfw.log || true; \
         FAILED=1; \
     fi; \
     \
     if [ "${FAILED}" -ne 0 ]; then \
-        echo ""; \
-        echo "============================================================"; \
         echo "ONE OR MORE MODEL DOWNLOADS FAILED"; \
-        echo "============================================================"; \
         exit 1; \
     fi; \
     \
-    echo ""; \
-    echo "============================================================"; \
-    echo "All Qwen downloads completed."; \
-    echo "Moving models into stable output directories..."; \
-    echo "============================================================"; \
+    echo "a9e81a58a78f260f67b337a6f615e8fa4cd3bc79847c77b7d61a581b789b1ba8  /tmp/qwen-lightning/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors" | sha256sum -c -; \
+    echo "16c4841028615bb82c38e79756c0abad42494d85bca0daebc2939384a74d86bb  /tmp/qwen-nsfw/qwen-image-edit-plus-nsfw-lora.safetensors" | sha256sum -c -; \
     \
     mv \
         /tmp/qwen-edit/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
         /model-output/unet/qwen_image_edit_2511_fp8mixed.safetensors; \
-    \
     mv \
         /tmp/qwen-base/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
         /model-output/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors; \
-    \
     mv \
         /tmp/qwen-base/split_files/vae/qwen_image_vae.safetensors \
         /model-output/vae/qwen_image_vae.safetensors; \
-    \
     mv \
         /tmp/qwen-lightning/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
         /model-output/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors; \
-    \
     mv \
         /tmp/qwen-nsfw/qwen-image-edit-plus-nsfw-lora.safetensors \
         /model-output/loras/qwen-image-edit-plus-nsfw-lora.safetensors; \
@@ -387,7 +345,6 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         /tmp/qwen-lightning.log \
         /tmp/qwen-nsfw.log; \
     \
-    echo ""; \
     echo "============================================================"; \
     echo "QWEN MODELS READY"; \
     echo "============================================================"; \
@@ -475,27 +432,6 @@ ENV CXX=/usr/bin/g++
 
 
 # =============================================================================
-# Custom Node Runtime Dependencies
-#
-# Fixes:
-#
-# ComfyUI-VideoHelperSuite:
-#     ModuleNotFoundError: No module named 'cv2'
-#
-# ComfyUI-WanVideoWrapper:
-#     ModuleNotFoundError: No module named 'accelerate'
-#
-# OpenCV headless is used because this is a serverless environment.
-# =============================================================================
-
-RUN uv pip install \
-    --no-cache-dir \
-    opencv-python-headless \
-    imageio-ffmpeg \
-    accelerate
-
-
-# =============================================================================
 # Runtime Verification
 #
 # Fail the Docker build immediately if these important runtime dependencies
@@ -509,8 +445,6 @@ RUN echo "============================================================" \
     && g++ --version \
     && python -c "import sqlalchemy; print('SQLAlchemy OK:', sqlalchemy.__version__)" \
     && python -c "import alembic; print('Alembic OK:', alembic.__version__)" \
-    && python -c "import cv2; print('OpenCV OK:', cv2.__version__)" \
-    && python -c "import accelerate; print('Accelerate OK:', accelerate.__version__)" \
     && python -c "import torch; print('PyTorch OK:', torch.__version__)" \
     && python -c "import triton; print('Triton OK:', triton.__version__)" \
     && echo "============================================================" \
@@ -537,19 +471,11 @@ RUN chmod +x /start.sh
 
 
 # =============================================================================
-# Helper Scripts
+# Immutable production image
+#
+# ComfyUI-Manager and runtime custom-node installers are intentionally omitted.
+# This worker ships the exact core workflow/model stack required at build time.
 # =============================================================================
-
-COPY scripts/comfy-node-install.sh \
-    /usr/local/bin/comfy-node-install
-
-RUN chmod +x /usr/local/bin/comfy-node-install
-
-
-COPY scripts/comfy-manager-set-mode.sh \
-    /usr/local/bin/comfy-manager-set-mode
-
-RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
 
 # =============================================================================
@@ -558,12 +484,11 @@ RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
 RUN echo "============================================================" \
     && echo "worker-comfyui production image ready" \
-    && echo "Qwen Image Edit 2511: enabled" \
-    && echo "Qwen Image Edit 2511 Lightning 8-step: enabled" \
-    && echo "Qwen Image Edit 2511 NSFW LoRA: enabled" \
+    && echo "Qwen Image Edit 2511 FP8: enabled" \
+    && echo "Qwen Lightning 8-step: enabled" \
+    && echo "Qwen NSFW LoRA: enabled" \
+    && echo "Core-only ComfyUI runtime: enabled" \
     && echo "Triton runtime compiler: enabled" \
-    && echo "OpenCV: enabled" \
-    && echo "Accelerate: enabled" \
     && echo "============================================================"
 
 

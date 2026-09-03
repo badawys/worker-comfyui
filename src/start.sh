@@ -8,6 +8,34 @@ if [[ -n "${TCMALLOC}" ]]; then
     export LD_PRELOAD="${TCMALLOC}"
 fi
 
+echo "worker-comfyui: Checking PyTorch / CUDA compatibility"
+python - <<'PY'
+import sys
+import torch
+
+print(f"worker-comfyui: PyTorch {torch.__version__}")
+print(f"worker-comfyui: PyTorch CUDA runtime {torch.version.cuda}")
+
+if torch.version.cuda != "12.8":
+    print(
+        f"worker-comfyui: ERROR: expected PyTorch cu128, got CUDA runtime {torch.version.cuda!r}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if not torch.cuda.is_available():
+    print(
+        "worker-comfyui: ERROR: torch.cuda.is_available() is false. "
+        "The RunPod host NVIDIA driver is incompatible with this image.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+props = torch.cuda.get_device_properties(0)
+print(f"worker-comfyui: GPU {props.name}")
+print(f"worker-comfyui: GPU VRAM {props.total_memory / (1024**3):.1f} GiB")
+PY
+
 echo "worker-comfyui: Starting ComfyUI"
 
 # Production defaults: no sampler previews, quiet logs, and high-RAM caching.
