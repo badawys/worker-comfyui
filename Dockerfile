@@ -189,7 +189,7 @@ RUN uv pip install \
 #
 # Current production image:
 #
-#   Qwen Image Edit 2511
+#   Qwen Image Edit 2511 FP8 + Lightning 8-step + NSFW LoRA
 #
 # WAN is intentionally disabled for now.
 #
@@ -231,17 +231,19 @@ RUN mkdir -p \
     /model-output/loras \
     /tmp/qwen-edit \
     /tmp/qwen-base \
-    /tmp/qwen-lora
+    /tmp/qwen-lightning \
+    /tmp/qwen-nsfw
 
 
 # =============================================================================
-# Download Qwen Image Edit 2511
+# Download Qwen Image Edit 2511 Production Stack
 #
-# Three independent Hugging Face jobs are started in parallel:
+# Four independent Hugging Face jobs are started in parallel:
 #
-# 1. Qwen Image Edit diffusion model
-# 2. Qwen text encoder + VAE
-# 3. Qwen Image Edit 2511 Lightning LoRA
+# 1. Qwen Image Edit 2511 FP8 diffusion model
+# 2. Qwen 2.5 VL FP8 text encoder + Qwen Image VAE
+# 3. Qwen Image Edit 2511 Lightning 8-step LoRA
+# 4. Qwen Image Edit 2511 NSFW LoRA
 #
 # All repositories are public, so no Hugging Face token is required.
 # =============================================================================
@@ -250,10 +252,10 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
     set -eu; \
     \
     echo "============================================================"; \
-    echo "Downloading Qwen Image Edit 2511"; \
+    echo "Downloading Qwen Image Edit 2511 production stack"; \
     echo "============================================================"; \
     \
-    echo "[1/3] Starting Qwen Image Edit 2511 diffusion model..."; \
+    echo "[1/4] Starting Qwen Image Edit 2511 FP8 diffusion model..."; \
     hf download \
         Comfy-Org/Qwen-Image-Edit_ComfyUI \
         split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
@@ -262,7 +264,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen-edit.log 2>&1 \
         & PID_QWEN_EDIT=$!; \
     \
-    echo "[2/3] Starting Qwen text encoder + VAE..."; \
+    echo "[2/4] Starting Qwen text encoder + VAE..."; \
     hf download \
         Comfy-Org/Qwen-Image_ComfyUI \
         split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
@@ -272,14 +274,23 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen-base.log 2>&1 \
         & PID_QWEN_BASE=$!; \
     \
-    echo "[3/3] Starting Qwen 2511 Lightning LoRA..."; \
+    echo "[3/4] Starting Qwen 2511 Lightning 8-step LoRA..."; \
     hf download \
         lightx2v/Qwen-Image-Edit-2511-Lightning \
-        Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
-        --local-dir /tmp/qwen-lora \
+        Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
+        --local-dir /tmp/qwen-lightning \
         --max-workers 2 \
-        > /tmp/qwen-lora.log 2>&1 \
-        & PID_QWEN_LORA=$!; \
+        > /tmp/qwen-lightning.log 2>&1 \
+        & PID_QWEN_LIGHTNING=$!; \
+    \
+    echo "[4/4] Starting Qwen 2511 NSFW LoRA..."; \
+    hf download \
+        aiunivers/qwen-image-edit-plus-nsfw-lora \
+        qwen-image-edit-plus-nsfw-lora.safetensors \
+        --local-dir /tmp/qwen-nsfw \
+        --max-workers 2 \
+        > /tmp/qwen-nsfw.log 2>&1 \
+        & PID_QWEN_NSFW=$!; \
     \
     echo ""; \
     echo "All Qwen downloads started."; \
@@ -289,7 +300,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
     FAILED=0; \
     \
     if wait "${PID_QWEN_EDIT}"; then \
-        echo "[OK] Qwen Image Edit 2511 diffusion model"; \
+        echo "[OK] Qwen Image Edit 2511 FP8 diffusion model"; \
     else \
         STATUS=$?; \
         echo "============================================================"; \
@@ -310,14 +321,25 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         FAILED=1; \
     fi; \
     \
-    if wait "${PID_QWEN_LORA}"; then \
-        echo "[OK] Qwen Image Edit 2511 Lightning LoRA"; \
+    if wait "${PID_QWEN_LIGHTNING}"; then \
+        echo "[OK] Qwen Image Edit 2511 Lightning 8-step LoRA"; \
     else \
         STATUS=$?; \
         echo "============================================================"; \
-        echo "[ERROR] Qwen Lightning LoRA failed: ${STATUS}"; \
+        echo "[ERROR] Qwen Lightning 8-step LoRA failed: ${STATUS}"; \
         echo "============================================================"; \
-        cat /tmp/qwen-lora.log || true; \
+        cat /tmp/qwen-lightning.log || true; \
+        FAILED=1; \
+    fi; \
+    \
+    if wait "${PID_QWEN_NSFW}"; then \
+        echo "[OK] Qwen Image Edit 2511 NSFW LoRA"; \
+    else \
+        STATUS=$?; \
+        echo "============================================================"; \
+        echo "[ERROR] Qwen NSFW LoRA failed: ${STATUS}"; \
+        echo "============================================================"; \
+        cat /tmp/qwen-nsfw.log || true; \
         FAILED=1; \
     fi; \
     \
@@ -348,16 +370,22 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         /model-output/vae/qwen_image_vae.safetensors; \
     \
     mv \
-        /tmp/qwen-lora/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
-        /model-output/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors; \
+        /tmp/qwen-lightning/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
+        /model-output/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors; \
+    \
+    mv \
+        /tmp/qwen-nsfw/qwen-image-edit-plus-nsfw-lora.safetensors \
+        /model-output/loras/qwen-image-edit-plus-nsfw-lora.safetensors; \
     \
     rm -rf \
         /tmp/qwen-edit \
         /tmp/qwen-base \
-        /tmp/qwen-lora \
+        /tmp/qwen-lightning \
+        /tmp/qwen-nsfw \
         /tmp/qwen-edit.log \
         /tmp/qwen-base.log \
-        /tmp/qwen-lora.log; \
+        /tmp/qwen-lightning.log \
+        /tmp/qwen-nsfw.log; \
     \
     echo ""; \
     echo "============================================================"; \
@@ -366,9 +394,9 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
     echo "qwen_image_edit_2511_fp8mixed.safetensors"; \
     echo "qwen_2.5_vl_7b_fp8_scaled.safetensors"; \
     echo "qwen_image_vae.safetensors"; \
-    echo "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"; \
+    echo "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"; \
+    echo "qwen-image-edit-plus-nsfw-lora.safetensors"; \
     echo "============================================================"
-
 
 # =============================================================================
 # =============================================================================
@@ -416,8 +444,12 @@ COPY --from=model-downloader \
     /comfyui/models/vae/qwen_image_vae.safetensors
 
 COPY --from=model-downloader \
-    /model-output/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
-    /comfyui/models/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+    /model-output/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
+    /comfyui/models/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors
+
+COPY --from=model-downloader \
+    /model-output/loras/qwen-image-edit-plus-nsfw-lora.safetensors \
+    /comfyui/models/loras/qwen-image-edit-plus-nsfw-lora.safetensors
 
 
 # =============================================================================
@@ -527,6 +559,8 @@ RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 RUN echo "============================================================" \
     && echo "worker-comfyui production image ready" \
     && echo "Qwen Image Edit 2511: enabled" \
+    && echo "Qwen Image Edit 2511 Lightning 8-step: enabled" \
+    && echo "Qwen Image Edit 2511 NSFW LoRA: enabled" \
     && echo "Triton runtime compiler: enabled" \
     && echo "OpenCV: enabled" \
     && echo "Accelerate: enabled" \
