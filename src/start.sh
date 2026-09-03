@@ -7,14 +7,12 @@ if [[ ! -x "${COMFY_PYTHON}" ]]; then
     exit 1
 fi
 
-# Use tcmalloc when it is available in the image. Do not set LD_PRELOAD to an
-# empty/non-existent library because that adds noisy loader warnings.
 TCMALLOC="$(ldconfig -p 2>/dev/null | grep -Po 'libtcmalloc.so.\d+' | head -n 1 || true)"
 if [[ -n "${TCMALLOC}" ]]; then
     export LD_PRELOAD="${TCMALLOC}"
 fi
 
-echo "worker-comfyui: Checking PyTorch / CUDA compatibility"
+echo "worker-comfyui: Checking PyTorch / CUDA"
 "${COMFY_PYTHON}" - <<'PY'
 import sys
 import torch
@@ -22,17 +20,9 @@ import torch
 print(f"worker-comfyui: PyTorch {torch.__version__}")
 print(f"worker-comfyui: PyTorch CUDA runtime {torch.version.cuda}")
 
-if torch.version.cuda != "12.8":
-    print(
-        f"worker-comfyui: ERROR: expected PyTorch cu128, got CUDA runtime {torch.version.cuda!r}",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
 if not torch.cuda.is_available():
     print(
-        "worker-comfyui: ERROR: torch.cuda.is_available() is false. "
-        "The RunPod host NVIDIA driver is incompatible with this image.",
+        "worker-comfyui: ERROR: CUDA is not available to PyTorch.",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -44,8 +34,6 @@ PY
 
 echo "worker-comfyui: Starting ComfyUI"
 
-# Production defaults: no sampler previews, quiet logs, and high-RAM caching.
-# These change runtime overhead only; they do not change Qwen sampling math.
 : "${COMFY_LOG_LEVEL:=WARNING}"
 : "${COMFY_HIGH_RAM:=true}"
 : "${COMFY_HIGH_VRAM:=auto}"
@@ -63,9 +51,6 @@ if [[ "${COMFY_HIGH_RAM}" == "true" ]]; then
     COMFY_ARGS+=(--high-ram)
 fi
 
-# Qwen Image Edit FP8 + Qwen-VL + VAE + two LoRAs is intentionally left on
-# DynamicVRAM for 24/32 GB GPUs. On >=45 GB GPUs, keeping models resident can
-# remove repeated model shuffling between jobs. Override with true/false.
 ENABLE_HIGH_VRAM="false"
 case "${COMFY_HIGH_VRAM}" in
     true)
@@ -80,9 +65,6 @@ case "${COMFY_HIGH_VRAM}" in
         fi
         ;;
     false)
-        ;;
-    *)
-        echo "worker-comfyui: Invalid COMFY_HIGH_VRAM=${COMFY_HIGH_VRAM}; expected auto|true|false" >&2
         ;;
 esac
 
