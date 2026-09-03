@@ -92,6 +92,25 @@ RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
 
 
 # =============================================================================
+# Use ComfyUI's workspace virtual environment for production runtime
+#
+# comfy-cli installs the ComfyUI runtime and its dependencies into:
+#     /comfyui/.venv
+#
+# /opt/venv is only the bootstrap environment that contains comfy-cli.
+# Switching VIRTUAL_ENV/PATH here ensures every later runtime dependency
+# (RunPod, Hugging Face, etc.) is installed into the same environment that
+# actually runs ComfyUI.
+# =============================================================================
+
+ENV VIRTUAL_ENV=/comfyui/.venv
+ENV PATH="/comfyui/.venv/bin:/opt/venv/bin:${PATH}"
+
+RUN test -x /comfyui/.venv/bin/python \
+    && /comfyui/.venv/bin/python -c "import torch; print('ComfyUI runtime Python OK:', torch.__version__, 'CUDA:', torch.version.cuda)"
+
+
+# =============================================================================
 # Verify ComfyUI / PyTorch Runtime
 #
 # comfy-cli already installs ComfyUI requirements, including the CUDA-specific
@@ -103,7 +122,7 @@ RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
 # a newer CUDA build that the RunPod host driver cannot initialize.
 # =============================================================================
 
-RUN python - <<'PY'
+RUN /comfyui/.venv/bin/python - <<'PY'
 import alembic
 import sqlalchemy
 import torch
@@ -129,13 +148,13 @@ RUN if [ "${ENABLE_PYTORCH_UPGRADE}" = "true" ]; then \
             echo "PYTORCH_INDEX_URL must be set when ENABLE_PYTORCH_UPGRADE=true" >&2; \
             exit 1; \
         fi; \
-        uv pip install \
+        uv pip install --python /comfyui/.venv/bin/python \
             --force-reinstall \
             torch \
             torchvision \
             torchaudio \
             --index-url "${PYTORCH_INDEX_URL}"; \
-        python -c "import torch; print('Upgraded PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda)"; \
+        /comfyui/.venv/bin/python -c "import torch; print('Upgraded PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda)"; \
     fi
 
 
@@ -155,7 +174,7 @@ RUN if [ "${ENABLE_PYTORCH_UPGRADE}" = "true" ]; then \
 
 WORKDIR /
 
-RUN uv pip install \
+RUN uv pip install --python /comfyui/.venv/bin/python \
     runpod \
     requests \
     websocket-client
@@ -192,7 +211,7 @@ ENV HF_HUB_DOWNLOAD_TIMEOUT=600
 ENV HF_HUB_ETAG_TIMEOUT=60
 ENV HF_HUB_DISABLE_UPDATE_CHECK=1
 
-RUN uv pip install \
+RUN uv pip install --python /comfyui/.venv/bin/python \
     huggingface_hub \
     hf_xet
 
