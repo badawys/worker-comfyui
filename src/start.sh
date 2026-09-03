@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+COMFY_PYTHON="${COMFY_PYTHON:-/comfyui/.venv/bin/python}"
+if [[ ! -x "${COMFY_PYTHON}" ]]; then
+    echo "worker-comfyui: ERROR: ComfyUI Python not found at ${COMFY_PYTHON}" >&2
+    exit 1
+fi
+
 # Use tcmalloc when it is available in the image. Do not set LD_PRELOAD to an
 # empty/non-existent library because that adds noisy loader warnings.
 TCMALLOC="$(ldconfig -p 2>/dev/null | grep -Po 'libtcmalloc.so.\d+' | head -n 1 || true)"
@@ -9,7 +15,7 @@ if [[ -n "${TCMALLOC}" ]]; then
 fi
 
 echo "worker-comfyui: Checking PyTorch / CUDA compatibility"
-python - <<'PY'
+"${COMFY_PYTHON}" - <<'PY'
 import sys
 import torch
 
@@ -92,13 +98,13 @@ if [[ -n "${COMFY_OUTPUT_DIR:-}" ]]; then
 fi
 
 if [[ "${SERVE_API_LOCALLY:-false}" == "true" ]]; then
-    python -u /comfyui/main.py "${COMFY_ARGS[@]}" --listen &
+    "${COMFY_PYTHON}" -u /comfyui/main.py "${COMFY_ARGS[@]}" --listen &
 
     echo "worker-comfyui: Starting RunPod Handler"
-    exec python -u /handler.py --rp_serve_api --rp_api_host=0.0.0.0
+    exec "${COMFY_PYTHON}" -u /handler.py --rp_serve_api --rp_api_host=0.0.0.0
 else
-    python -u /comfyui/main.py "${COMFY_ARGS[@]}" &
+    "${COMFY_PYTHON}" -u /comfyui/main.py "${COMFY_ARGS[@]}" &
 
     echo "worker-comfyui: Starting RunPod Handler"
-    exec python -u /handler.py
+    exec "${COMFY_PYTHON}" -u /handler.py
 fi
