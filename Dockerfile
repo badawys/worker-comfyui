@@ -28,6 +28,7 @@ ENV PIP_PREFER_BINARY=1
 ENV PYTHONUNBUFFERED=1
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 ENV PIP_NO_INPUT=1
+ENV GIT_TERMINAL_PROMPT=0
 
 
 # =============================================================================
@@ -71,12 +72,25 @@ RUN uv pip install \
 
 # =============================================================================
 # Install ComfyUI
+#
+# Use the canonical Comfy-Org repository directly. The historical
+# comfyanonymous/ComfyUI URL redirects to Comfy-Org and can fail in non-
+# interactive Docker builders with a misleading Git credential prompt.
 # =============================================================================
+
+RUN git ls-remote --exit-code \
+        https://github.com/Comfy-Org/ComfyUI.git \
+        "refs/tags/v${COMFYUI_VERSION}" >/dev/null \
+    || { \
+        echo "Unable to reach the canonical ComfyUI repository or tag v${COMFYUI_VERSION}" >&2; \
+        exit 1; \
+    }
 
 RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
         /usr/bin/yes | comfy \
             --workspace /comfyui \
             install \
+            --url "https://github.com/Comfy-Org/ComfyUI.git" \
             --version "${COMFYUI_VERSION}" \
             --cuda-version "${CUDA_VERSION_FOR_COMFY}" \
             --skip-manager \
@@ -85,6 +99,7 @@ RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
         /usr/bin/yes | comfy \
             --workspace /comfyui \
             install \
+            --url "https://github.com/Comfy-Org/ComfyUI.git" \
             --version "${COMFYUI_VERSION}" \
             --skip-manager \
             --nvidia; \
