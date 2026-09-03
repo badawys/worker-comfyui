@@ -2,116 +2,234 @@
   "input": {
     "images": [
       {
-        "name": "test.png",
+        "name": "input_image_1.png",
         "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAMklEQVR4nGI5ZdXAQEvARFPTRy0YtWDUglELRi0YtWDUglELRi0YtWDUAioCQAAAAP//E24Bx3jUKuYAAAAASUVORK5CYII="
       }
     ],
     "workflow": {
-      "6": {
+      "60": {
         "inputs": {
-          "text": "anime cat with massive fluffy fennec ears and a big fluffy tail blonde messy long hair blue eyes wearing a construction outfit placing a fancy black forest cake with candles on top of a dinner table of an old dark Victorian mansion lit by candlelight with a bright window to the foggy forest and very expensive stuff everywhere there are paintings on the walls",
-          "clip": ["30", 1]
-        },
-        "class_type": "CLIPTextEncode",
-        "_meta": {
-          "title": "CLIP Text Encode (Positive Prompt)"
-        }
-      },
-      "8": {
-        "inputs": {
-          "samples": ["31", 0],
-          "vae": ["30", 2]
-        },
-        "class_type": "VAEDecode",
-        "_meta": {
-          "title": "VAE Decode"
-        }
-      },
-      "9": {
-        "inputs": {
-          "filename_prefix": "ComfyUI",
-          "images": ["8", 0]
+          "filename_prefix": "Qwen_Edit_2511",
+          "images": [
+            "115:8",
+            0
+          ]
         },
         "class_type": "SaveImage",
         "_meta": {
-          "title": "Save Image"
+          "title": "Save Image (converted to websocket by worker)"
         }
       },
-      "27": {
+      "78": {
         "inputs": {
-          "width": 512,
-          "height": 512,
-          "batch_size": 1
+          "image": "input_image_1.png"
         },
-        "class_type": "EmptySD3LatentImage",
+        "class_type": "LoadImage",
         "_meta": {
-          "title": "EmptySD3LatentImage"
+          "title": "Load Image"
         }
       },
-      "30": {
+      "115:112": {
         "inputs": {
-          "ckpt_name": "flux1-dev-fp8.safetensors"
+          "upscale_method": "area",
+          "megapixels": 1.0,
+          "resolution_steps": 1,
+          "image": [
+            "78",
+            0
+          ]
         },
-        "class_type": "CheckpointLoaderSimple",
+        "class_type": "ImageScaleToTotalPixels",
         "_meta": {
-          "title": "Load Checkpoint"
+          "title": "Scale Input to 1 MP (Aspect Ratio Preserved)"
         }
       },
-      "31": {
+      "115:75": {
         "inputs": {
-          "seed": 243057879077961,
-          "steps": 10,
+          "strength": 1,
+          "model": [
+            "115:66",
+            0
+          ]
+        },
+        "class_type": "CFGNorm",
+        "_meta": {
+          "title": "CFGNorm"
+        }
+      },
+      "115:39": {
+        "inputs": {
+          "vae_name": "qwen_image_vae.safetensors"
+        },
+        "class_type": "VAELoader",
+        "_meta": {
+          "title": "Load VAE"
+        }
+      },
+      "115:38": {
+        "inputs": {
+          "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+          "type": "qwen_image",
+          "device": "default"
+        },
+        "class_type": "CLIPLoader",
+        "_meta": {
+          "title": "Load CLIP"
+        }
+      },
+      "115:37": {
+        "inputs": {
+          "unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+          "weight_dtype": "default"
+        },
+        "class_type": "UNETLoader",
+        "_meta": {
+          "title": "Load Qwen Image Edit 2511 FP8"
+        }
+      },
+      "115:110": {
+        "inputs": {
+          "prompt": "",
+          "clip": [
+            "115:38",
+            0
+          ]
+        },
+        "class_type": "TextEncodeQwenImageEditPlus",
+        "_meta": {
+          "title": "Negative Text Conditioning"
+        }
+      },
+      "115:89": {
+        "inputs": {
+          "lora_name": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+          "strength_model": 1,
+          "model": [
+            "115:37",
+            0
+          ]
+        },
+        "class_type": "LoraLoaderModelOnly",
+        "_meta": {
+          "title": "Qwen Image Edit 2511 Lightning 8-Step"
+        }
+      },
+      "115:114": {
+        "inputs": {
+          "lora_name": "qwen-image-edit-plus-nsfw-lora.safetensors",
+          "strength_model": 0.45,
+          "model": [
+            "115:89",
+            0
+          ]
+        },
+        "class_type": "LoraLoaderModelOnly",
+        "_meta": {
+          "title": "Qwen Image Edit 2511 NSFW LoRA"
+        }
+      },
+      "115:66": {
+        "inputs": {
+          "shift": 3.1,
+          "model": [
+            "115:114",
+            0
+          ]
+        },
+        "class_type": "ModelSamplingAuraFlow",
+        "_meta": {
+          "title": "ModelSamplingAuraFlow"
+        }
+      },
+      "115:111": {
+        "inputs": {
+          "prompt": "change the woman clothes to a bikini, maintain the same exact identity, face, body proportions, body shape and size, breasts shape and size, pose, camera angle, lighting direction, background and composition. Preserve realistic natural human skin texture, pores, subtle skin color variation, fine body detail, realistic highlights and shadows. The edit must look like the same original photograph, with only the requested clothing changed. Avoid flat skin, plastic skin, waxy skin, over-smoothing, faded colors, washed-out contrast, artificial anatomy, or unnecessary changes.",
+          "clip": [
+            "115:38",
+            0
+          ]
+        },
+        "class_type": "TextEncodeQwenImageEditPlus",
+        "_meta": {
+          "title": "Positive Edit Prompt"
+        }
+      },
+      "115:113": {
+        "inputs": {
+          "conditioning": [
+            "115:111",
+            0
+          ],
+          "latent": [
+            "115:88",
+            0
+          ]
+        },
+        "class_type": "ReferenceLatent",
+        "_meta": {
+          "title": "Positive Reference Latent (Shared VAE)"
+        }
+      },
+      "115:88": {
+        "inputs": {
+          "pixels": [
+            "115:112",
+            0
+          ],
+          "vae": [
+            "115:39",
+            0
+          ]
+        },
+        "class_type": "VAEEncode",
+        "_meta": {
+          "title": "VAE Encode Resized Input"
+        }
+      },
+      "115:3": {
+        "inputs": {
+          "seed": 1118877715456453,
+          "steps": 8,
           "cfg": 1,
           "sampler_name": "euler",
           "scheduler": "simple",
           "denoise": 1,
-          "model": ["30", 0],
-          "positive": ["35", 0],
-          "negative": ["33", 0],
-          "latent_image": ["27", 0]
+          "model": [
+            "115:75",
+            0
+          ],
+          "positive": [
+            "115:113",
+            0
+          ],
+          "negative": [
+            "115:110",
+            0
+          ],
+          "latent_image": [
+            "115:88",
+            0
+          ]
         },
         "class_type": "KSampler",
         "_meta": {
-          "title": "KSampler"
+          "title": "KSampler - 2511 Lightning 8-Step + NSFW"
         }
       },
-      "33": {
+      "115:8": {
         "inputs": {
-          "text": "",
-          "clip": ["30", 1]
+          "samples": [
+            "115:3",
+            0
+          ],
+          "vae": [
+            "115:39",
+            0
+          ]
         },
-        "class_type": "CLIPTextEncode",
+        "class_type": "VAEDecode",
         "_meta": {
-          "title": "CLIP Text Encode (Negative Prompt)"
-        }
-      },
-      "35": {
-        "inputs": {
-          "guidance": 3.5,
-          "conditioning": ["6", 0]
-        },
-        "class_type": "FluxGuidance",
-        "_meta": {
-          "title": "FluxGuidance"
-        }
-      },
-      "38": {
-        "inputs": {
-          "images": ["8", 0]
-        },
-        "class_type": "PreviewImage",
-        "_meta": {
-          "title": "Preview Image"
-        }
-      },
-      "40": {
-        "inputs": {
-          "filename_prefix": "ComfyUI",
-          "images": ["8", 0]
-        },
-        "class_type": "SaveImage",
-        "_meta": {
-          "title": "Save Image"
+          "title": "VAE Decode"
         }
       }
     }
