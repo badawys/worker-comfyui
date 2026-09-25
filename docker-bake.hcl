@@ -11,32 +11,29 @@ variable "RELEASE_VERSION" {
 }
 
 variable "COMFYUI_VERSION" {
-  default = "latest"
+  default = "0.37.0"
 }
 
 variable "BASE_IMAGE" {
   default = "nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04"
 }
 
+variable "LLAMA_BUILD_IMAGE" {
+  default = "nvidia/cuda:12.6.3-devel-ubuntu24.04"
+}
+
 variable "CUDA_VERSION_FOR_COMFY" {
   default = "12.6"
-}
-
-variable "ENABLE_PYTORCH_UPGRADE" {
-  default = "false"
-}
-
-variable "PYTORCH_INDEX_URL" {
-  default = ""
 }
 
 
 # =============================================================================
 # Default Build
 #
-# There is now only ONE production image:
-#
-# Qwen Image Edit 2511 + WAN 2.2
+# Dedicated Qwen Image 2.1 image-editing worker:
+# - Q5_K_M uncensored GGUF diffusion
+# - Q4_K_M Qwen3-VL encoder
+# - Q4_K_M local I2I prompt enhancer
 # =============================================================================
 
 group "default" {
@@ -58,11 +55,10 @@ target "worker" {
   ]
 
   args = {
-    BASE_IMAGE              = "${BASE_IMAGE}"
-    COMFYUI_VERSION         = "${COMFYUI_VERSION}"
-    CUDA_VERSION_FOR_COMFY  = "${CUDA_VERSION_FOR_COMFY}"
-    ENABLE_PYTORCH_UPGRADE  = "${ENABLE_PYTORCH_UPGRADE}"
-    PYTORCH_INDEX_URL       = "${PYTORCH_INDEX_URL}"
+    BASE_IMAGE             = "${BASE_IMAGE}"
+    LLAMA_BUILD_IMAGE      = "${LLAMA_BUILD_IMAGE}"
+    COMFYUI_VERSION        = "${COMFYUI_VERSION}"
+    CUDA_VERSION_FOR_COMFY = "${CUDA_VERSION_FOR_COMFY}"
   }
 
   tags = [
