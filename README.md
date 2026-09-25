@@ -39,7 +39,7 @@ The prompt enhancer runs locally through `llama-cpp-python`; no external LLM/API
 - `leejet/ComfyUI-GGUF`
 - `xiaowuapple-pixel/ComfyUI-Prompt-Enhancer`
 
-The Docker build compiles a CUDA-enabled `llama-cpp-python` wheel from a pinned JamePeng fork commit in a separate CUDA 12.6 builder stage. That fork provides the Qwen3.5/Qwen3-VL multimodal handlers required by the local GGUF prompt enhancer, while the production image remains based on the CUDA 12.6 runtime.
+The Docker build installs JamePeng's prebuilt CUDA 12.6 / Python 3.12 Linux `llama-cpp-python` wheel (`0.3.49+cu126`). This provides the Qwen3.5/Qwen3-VL multimodal handlers required by the local GGUF prompt enhancer without compiling llama.cpp during the RunPod build.
 
 ### Default edit workflow
 

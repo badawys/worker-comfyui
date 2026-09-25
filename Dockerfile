@@ -5,51 +5,6 @@
 # =============================================================================
 
 ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
-ARG LLAMA_BUILD_IMAGE=nvidia/cuda:12.6.3-devel-ubuntu24.04
-
-
-# =============================================================================
-# Build CUDA-enabled llama-cpp-python for the GGUF prompt enhancer
-# =============================================================================
-
-FROM ${LLAMA_BUILD_IMAGE} AS llama-builder
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV CMAKE_BUILD_PARALLEL_LEVEL=8
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        python3.12 \
-        python3.12-dev \
-        python3.12-venv \
-        python3-pip \
-        build-essential \
-        cmake \
-        ninja-build \
-        git \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python3.12 -m venv /build-venv
-ENV PATH="/build-venv/bin:${PATH}"
-
-RUN python -m pip install --upgrade pip setuptools wheel scikit-build-core
-
-# Support common RunPod Ampere/Ada/Hopper GPUs while keeping the worker on the
-# known-good CUDA 12.6 stack. Blackwell SM120 requires a newer CUDA toolchain.
-ENV CMAKE_ARGS="-DGGML_CUDA=on -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=80;86;89;90"
-
-ARG LLAMA_CPP_PYTHON_COMMIT=f68d1d1166799beb104cb971a59b9a96e6de7a16
-
-# The prompt-enhancer plugin requires Qwen3.5/Qwen3-VL multimodal handlers that
-# are currently provided by the JamePeng llama-cpp-python fork, not by the
-# official PyPI llama-cpp-python release. Pin the source commit for reproducible
-# builds.
-RUN python -m pip wheel \
-        --no-deps \
-        --wheel-dir /wheels \
-        "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git@${LLAMA_CPP_PYTHON_COMMIT}"
-
-
 # =============================================================================
 # ComfyUI base
 # =============================================================================
@@ -125,17 +80,16 @@ RUN if [ -f ComfyUI-GGUF/requirements.txt ]; then \
             --no-cache-dir -r ComfyUI-Prompt-Enhancer/requirements.txt; \
     fi
 
-# Install the CUDA-enabled JamePeng llama.cpp Python binding built above.
-# This fork provides the Qwen3.5/Qwen3-VL multimodal handlers used by the
-# prompt-enhancer GGUF path.
-COPY --from=llama-builder /wheels /tmp/llama-wheels
+# Use JamePeng's prebuilt CUDA 12.6 / Python 3.12 Linux wheel.
+# This avoids compiling llama.cpp during the RunPod image build (the previous
+# source build could consume a large part of RunPod's 30-minute build limit).
+ARG LLAMA_CPP_WHEEL_URL=https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49%2Bcu126-cp312-cp312-linux_x86_64.whl
 
 RUN uv pip install --python /comfyui/.venv/bin/python \
-        /tmp/llama-wheels/llama_cpp_python-*.whl \
+        "${LLAMA_CPP_WHEEL_URL}" \
     && uv pip install --python /comfyui/.venv/bin/python \
         sentencepiece \
-        protobuf \
-    && rm -rf /tmp/llama-wheels
+        protobuf
 
 # RunPod worker dependencies live in the same environment as ComfyUI.
 WORKDIR /

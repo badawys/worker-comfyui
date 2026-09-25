@@ -18,10 +18,6 @@ variable "BASE_IMAGE" {
   default = "nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04"
 }
 
-variable "LLAMA_BUILD_IMAGE" {
-  default = "nvidia/cuda:12.6.3-devel-ubuntu24.04"
-}
-
 variable "CUDA_VERSION_FOR_COMFY" {
   default = "12.6"
 }
@@ -56,7 +52,6 @@ target "worker" {
 
   args = {
     BASE_IMAGE             = "${BASE_IMAGE}"
-    LLAMA_BUILD_IMAGE      = "${LLAMA_BUILD_IMAGE}"
     COMFYUI_VERSION        = "${COMFYUI_VERSION}"
     CUDA_VERSION_FOR_COMFY = "${CUDA_VERSION_FOR_COMFY}"
   }
