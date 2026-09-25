@@ -7,229 +7,196 @@
       }
     ],
     "workflow": {
+      "10": {
+        "inputs": {
+          "image": "input_image_1.png"
+        },
+        "class_type": "LoadImage",
+        "_meta": {
+          "title": "Input Image"
+        }
+      },
+      "20": {
+        "inputs": {
+          "T2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
+          "I2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
+          "Vision Model": "Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf",
+          "GPU Offload Layers": -1,
+          "Context Length": "16384",
+          "System Prompt File": "",
+          "Thinking": true,
+          "Unload Model After Generation": true,
+          "Plan Tokens": 800
+        },
+        "class_type": "QwenImage21PELoaderGGUF",
+        "_meta": {
+          "title": "Qwen Image 2.1 I2I Prompt Enhancer (GGUF Q4_K_M)"
+        }
+      },
+      "21": {
+        "inputs": {
+          "Prompt": "Change the shirt color to red. Preserve the same identity, face, pose, body proportions, lighting, camera angle, background, composition, and all details not explicitly requested.",
+          "Task": "Image Edit (edit)",
+          "Seed": 42,
+          "Use Cache": true,
+          "Target Megapixels": 1,
+          "Aspect Ratio": "Auto (model decides)",
+          "Prompt Count": 1,
+          "pe_model": [
+            "20",
+            0
+          ],
+          "Image 1": [
+            "10",
+            0
+          ]
+        },
+        "class_type": "QwenImage21PromptEnhancer",
+        "_meta": {
+          "title": "Enhance Edit Prompt"
+        }
+      },
+      "30": {
+        "inputs": {
+          "clip_name": "qwen3vl-8b-it-q4_k_m.gguf",
+          "type": "qwen_image"
+        },
+        "class_type": "CLIPLoaderGGUF",
+        "_meta": {
+          "title": "Qwen3-VL 8B GGUF Q4_K_M"
+        }
+      },
+      "31": {
+        "inputs": {
+          "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+        },
+        "class_type": "VAELoader",
+        "_meta": {
+          "title": "Qwen Image 2.1 VAE"
+        }
+      },
+      "32": {
+        "inputs": {
+          "clip": [
+            "30",
+            0
+          ],
+          "prompts": [
+            "21",
+            0
+          ],
+          "negative_prompt": "",
+          "resolution": 0,
+          "vae": [
+            "31",
+            0
+          ],
+          "image_1": [
+            "10",
+            0
+          ]
+        },
+        "class_type": "QwenImage21TextEncodeList",
+        "_meta": {
+          "title": "Encode Enhanced Prompt + Source Image"
+        }
+      },
+      "33": {
+        "inputs": {
+          "conditioning": [
+            "32",
+            0
+          ],
+          "clip": [
+            "30",
+            0
+          ]
+        },
+        "class_type": "PromptEnhancerReleaseTextEncoder",
+        "_meta": {
+          "title": "Release Text Encoder VRAM"
+        }
+      },
+      "40": {
+        "inputs": {
+          "unet_name": "qwen-image-2.1-UC-Q5_K_M.gguf"
+        },
+        "class_type": "UnetLoaderGGUF",
+        "_meta": {
+          "title": "Qwen Image 2.1 Uncensored GGUF Q5_K_M"
+        }
+      },
+      "41": {
+        "inputs": {
+          "model": [
+            "40",
+            0
+          ],
+          "device": "auto",
+          "dtype": "default"
+        },
+        "class_type": "QwenImage21Cache",
+        "_meta": {
+          "title": "Qwen Image 2.1 Cache"
+        }
+      },
+      "50": {
+        "inputs": {
+          "seed": 1118877715456453,
+          "steps": 25,
+          "cfg": 1,
+          "sampler_name": "euler",
+          "scheduler": "simple",
+          "denoise": 1,
+          "model": [
+            "41",
+            0
+          ],
+          "positive": [
+            "33",
+            0
+          ],
+          "negative": [
+            "32",
+            1
+          ],
+          "latent_image": [
+            "32",
+            2
+          ]
+        },
+        "class_type": "KSampler",
+        "_meta": {
+          "title": "Qwen Image 2.1 Sampler"
+        }
+      },
       "60": {
         "inputs": {
-          "filename_prefix": "Qwen_Edit_2511",
+          "samples": [
+            "50",
+            0
+          ],
+          "vae": [
+            "31",
+            0
+          ]
+        },
+        "class_type": "VAEDecode",
+        "_meta": {
+          "title": "Decode"
+        }
+      },
+      "70": {
+        "inputs": {
+          "filename_prefix": "Qwen_Image_2_1_Edit",
           "images": [
-            "115:8",
+            "60",
             0
           ]
         },
         "class_type": "SaveImage",
         "_meta": {
           "title": "Save Image (converted to websocket by worker)"
-        }
-      },
-      "78": {
-        "inputs": {
-          "image": "input_image_1.png"
-        },
-        "class_type": "LoadImage",
-        "_meta": {
-          "title": "Load Image"
-        }
-      },
-      "115:112": {
-        "inputs": {
-          "upscale_method": "area",
-          "megapixels": 1.0,
-          "resolution_steps": 1,
-          "image": [
-            "78",
-            0
-          ]
-        },
-        "class_type": "ImageScaleToTotalPixels",
-        "_meta": {
-          "title": "Scale Input to 1 MP (Aspect Ratio Preserved)"
-        }
-      },
-      "115:75": {
-        "inputs": {
-          "strength": 1,
-          "model": [
-            "115:66",
-            0
-          ]
-        },
-        "class_type": "CFGNorm",
-        "_meta": {
-          "title": "CFGNorm"
-        }
-      },
-      "115:39": {
-        "inputs": {
-          "vae_name": "qwen_image_vae.safetensors"
-        },
-        "class_type": "VAELoader",
-        "_meta": {
-          "title": "Load VAE"
-        }
-      },
-      "115:38": {
-        "inputs": {
-          "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
-          "type": "qwen_image",
-          "device": "default"
-        },
-        "class_type": "CLIPLoader",
-        "_meta": {
-          "title": "Load CLIP"
-        }
-      },
-      "115:37": {
-        "inputs": {
-          "unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
-          "weight_dtype": "default"
-        },
-        "class_type": "UNETLoader",
-        "_meta": {
-          "title": "Load Qwen Image Edit 2511 FP8"
-        }
-      },
-      "115:110": {
-        "inputs": {
-          "prompt": "",
-          "clip": [
-            "115:38",
-            0
-          ]
-        },
-        "class_type": "TextEncodeQwenImageEditPlus",
-        "_meta": {
-          "title": "Negative Text Conditioning"
-        }
-      },
-      "115:89": {
-        "inputs": {
-          "lora_name": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
-          "strength_model": 1,
-          "model": [
-            "115:37",
-            0
-          ]
-        },
-        "class_type": "LoraLoaderModelOnly",
-        "_meta": {
-          "title": "Qwen Image Edit 2511 Lightning 8-Step"
-        }
-      },
-      "115:114": {
-        "inputs": {
-          "lora_name": "qwen-image-edit-plus-nsfw-lora.safetensors",
-          "strength_model": 0.45,
-          "model": [
-            "115:89",
-            0
-          ]
-        },
-        "class_type": "LoraLoaderModelOnly",
-        "_meta": {
-          "title": "Qwen Image Edit 2511 NSFW LoRA"
-        }
-      },
-      "115:66": {
-        "inputs": {
-          "shift": 3.1,
-          "model": [
-            "115:114",
-            0
-          ]
-        },
-        "class_type": "ModelSamplingAuraFlow",
-        "_meta": {
-          "title": "ModelSamplingAuraFlow"
-        }
-      },
-      "115:111": {
-        "inputs": {
-          "prompt": "change the woman clothes to a bikini, maintain the same exact identity, face, body proportions, body shape and size, breasts shape and size, pose, camera angle, lighting direction, background and composition. Preserve realistic natural human skin texture, pores, subtle skin color variation, fine body detail, realistic highlights and shadows. The edit must look like the same original photograph, with only the requested clothing changed. Avoid flat skin, plastic skin, waxy skin, over-smoothing, faded colors, washed-out contrast, artificial anatomy, or unnecessary changes.",
-          "clip": [
-            "115:38",
-            0
-          ]
-        },
-        "class_type": "TextEncodeQwenImageEditPlus",
-        "_meta": {
-          "title": "Positive Edit Prompt"
-        }
-      },
-      "115:113": {
-        "inputs": {
-          "conditioning": [
-            "115:111",
-            0
-          ],
-          "latent": [
-            "115:88",
-            0
-          ]
-        },
-        "class_type": "ReferenceLatent",
-        "_meta": {
-          "title": "Positive Reference Latent (Shared VAE)"
-        }
-      },
-      "115:88": {
-        "inputs": {
-          "pixels": [
-            "115:112",
-            0
-          ],
-          "vae": [
-            "115:39",
-            0
-          ]
-        },
-        "class_type": "VAEEncode",
-        "_meta": {
-          "title": "VAE Encode Resized Input"
-        }
-      },
-      "115:3": {
-        "inputs": {
-          "seed": 1118877715456453,
-          "steps": 8,
-          "cfg": 1,
-          "sampler_name": "euler",
-          "scheduler": "simple",
-          "denoise": 1,
-          "model": [
-            "115:75",
-            0
-          ],
-          "positive": [
-            "115:113",
-            0
-          ],
-          "negative": [
-            "115:110",
-            0
-          ],
-          "latent_image": [
-            "115:88",
-            0
-          ]
-        },
-        "class_type": "KSampler",
-        "_meta": {
-          "title": "KSampler - 2511 Lightning 8-Step + NSFW"
-        }
-      },
-      "115:8": {
-        "inputs": {
-          "samples": [
-            "115:3",
-            0
-          ],
-          "vae": [
-            "115:39",
-            0
-          ]
-        },
-        "class_type": "VAEDecode",
-        "_meta": {
-          "title": "VAE Decode"
         }
       }
     }
