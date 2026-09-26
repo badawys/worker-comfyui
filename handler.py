@@ -10,6 +10,7 @@ import traceback
 import uuid
 from io import BytesIO
 
+from PIL import Image, ImageOps
 import requests
 import runpod
 from runpod.serverless.utils import rp_upload
@@ -38,6 +39,8 @@ COMFY_WEBSOCKET_OUTPUT = (
 )
 COMFY_SKIP_BASE64 = os.environ.get("COMFY_SKIP_BASE64", "false").lower() == "true"
 WORKER_VERBOSE = os.environ.get("WORKER_VERBOSE", "false").lower() == "true"
+COMFY_INPUT_MAX_DIMENSION = int(os.environ.get("COMFY_INPUT_MAX_DIMENSION", "768"))
+COMFY_INPUT_JPEG_QUALITY = int(os.environ.get("COMFY_INPUT_JPEG_QUALITY", "92"))
 
 # ComfyUI binary websocket event type for an encoded preview image.
 # SaveImageWebsocket uses this exact event path and sends an 8-byte header:
@@ -173,6 +176,51 @@ def _safe_input_name(name):
     return safe_name
 
 
+def _resize_input_image(blob, name):
+    """Cap uploaded images to the configured longest-side dimension."""
+    max_dimension = COMFY_INPUT_MAX_DIMENSION
+    if max_dimension <= 0:
+        return blob
+
+    with Image.open(BytesIO(blob)) as source:
+        source = ImageOps.exif_transpose(source)
+        width, height = source.size
+        if max(width, height) <= max_dimension:
+            return blob
+
+        resized = source.copy()
+        resized.thumbnail(
+            (max_dimension, max_dimension),
+            Image.Resampling.LANCZOS,
+            reducing_gap=3.0,
+        )
+
+        suffix = Path(name).suffix.lower()
+        output = BytesIO()
+        quality = max(1, min(100, COMFY_INPUT_JPEG_QUALITY))
+
+        if suffix in {".jpg", ".jpeg"}:
+            if resized.mode not in {"RGB", "L"}:
+                if "A" in resized.getbands():
+                    rgba = resized.convert("RGBA")
+                    background = Image.new("RGB", rgba.size, "white")
+                    background.paste(rgba, mask=rgba.getchannel("A"))
+                    resized = background
+                else:
+                    resized = resized.convert("RGB")
+            resized.save(output, format="JPEG", quality=quality, optimize=True)
+        elif suffix == ".webp":
+            resized.save(output, format="WEBP", quality=quality, method=4)
+        else:
+            resized.save(output, format="PNG", optimize=True)
+
+        _debug(
+            f"Resized input image {name}: {width}x{height} -> "
+            f"{resized.width}x{resized.height}"
+        )
+        return output.getvalue()
+
+
 def write_input_images(images):
     """Write request images directly into ComfyUI's input directory.
 
@@ -190,6 +238,7 @@ def write_input_images(images):
         try:
             name = _safe_input_name(image["name"])
             blob = _decode_image_data_uri(image["image"])
+            blob = _resize_input_image(blob, name)
             destination = COMFY_INPUT_DIR / name
             temp_path = COMFY_INPUT_DIR / f".{name}.{uuid.uuid4().hex}.tmp"
             temp_path.write_bytes(blob)
@@ -215,6 +264,7 @@ def upload_images_http(images):
         try:
             name = _safe_input_name(image["name"])
             blob = _decode_image_data_uri(image["image"])
+            blob = _resize_input_image(blob, name)
             files = {
                 "image": (name, BytesIO(blob), "application/octet-stream"),
                 "overwrite": (None, "true"),

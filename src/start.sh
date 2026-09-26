@@ -12,7 +12,11 @@ echo "worker-comfyui: Starting ComfyUI"
 # Allow operators to tweak verbosity; default is DEBUG.
 : "${COMFY_LOG_LEVEL:=DEBUG}"
 
-COMFY_ARGS="--disable-auto-launch --disable-metadata --verbose ${COMFY_LOG_LEVEL} --log-stdout"
+if [ -z "${COMFY_PERFORMANCE_ARGS+x}" ]; then
+    COMFY_PERFORMANCE_ARGS="--fast fp16_accumulation"
+fi
+
+COMFY_ARGS="--disable-auto-launch --disable-metadata --verbose ${COMFY_LOG_LEVEL} --log-stdout ${COMFY_PERFORMANCE_ARGS}"
 
 if [ -n "${COMFY_OUTPUT_DIR}" ]; then
     COMFY_ARGS="${COMFY_ARGS} --output-directory ${COMFY_OUTPUT_DIR}"
