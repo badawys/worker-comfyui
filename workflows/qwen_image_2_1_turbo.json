@@ -1,0 +1,194 @@
+{
+  "10": {
+    "inputs": {
+      "image": "input_image_1.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Input Image"
+    }
+  },
+  "20": {
+    "inputs": {
+      "T2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
+      "I2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
+      "Vision Model": "Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf",
+      "GPU Offload Layers": -1,
+      "Context Length": "16384",
+      "System Prompt File": "",
+      "Thinking": true,
+      "Unload Model After Generation": true,
+      "Plan Tokens": 800
+    },
+    "class_type": "QwenImage21PELoaderGGUF",
+    "_meta": {
+      "title": "Qwen Image 2.1 I2I Prompt Enhancer (GGUF Q4_K_M)"
+    }
+  },
+  "21": {
+    "inputs": {
+      "Prompt": "Change the shirt color to red. Preserve the same identity, face, pose, body proportions, lighting, camera angle, background, composition, and all details not explicitly requested.",
+      "Task": "Image Edit (edit)",
+      "Seed": 42,
+      "Use Cache": true,
+      "Target Megapixels": 1,
+      "Aspect Ratio": "Auto (model decides)",
+      "Prompt Count": 1,
+      "pe_model": [
+        "20",
+        0
+      ],
+      "Image 1": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "QwenImage21PromptEnhancer",
+    "_meta": {
+      "title": "Enhance Edit Prompt"
+    }
+  },
+  "30": {
+    "inputs": {
+      "clip_name": "qwen3vl-8b-it-q4_k_m.gguf",
+      "type": "qwen_image"
+    },
+    "class_type": "CLIPLoaderGGUF",
+    "_meta": {
+      "title": "Qwen3-VL 8B GGUF Q4_K_M"
+    }
+  },
+  "31": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Qwen Image 2.1 VAE"
+    }
+  },
+  "32": {
+    "inputs": {
+      "clip": [
+        "30",
+        0
+      ],
+      "prompts": [
+        "21",
+        0
+      ],
+      "negative_prompt": "",
+      "resolution": 0,
+      "vae": [
+        "31",
+        0
+      ],
+      "image_1": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "QwenImage21TextEncodeList",
+    "_meta": {
+      "title": "Encode Enhanced Prompt + Source Image"
+    }
+  },
+  "33": {
+    "inputs": {
+      "conditioning": [
+        "32",
+        0
+      ],
+      "clip": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "PromptEnhancerReleaseTextEncoder",
+    "_meta": {
+      "title": "Release Text Encoder VRAM"
+    }
+  },
+  "40": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "Qwen Image 2.1 Turbo · Viggle v0.1 4-step Q5_K_M"
+    }
+  },
+  "41": {
+    "inputs": {
+      "model": [
+        "40",
+        0
+      ],
+      "device": "auto",
+      "dtype": "default"
+    },
+    "class_type": "QwenImage21Cache",
+    "_meta": {
+      "title": "Qwen Image 2.1 Cache"
+    }
+  },
+  "50": {
+    "inputs": {
+      "seed": 1118877715456453,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "41",
+        0
+      ],
+      "positive": [
+        "33",
+        0
+      ],
+      "negative": [
+        "32",
+        1
+      ],
+      "latent_image": [
+        "32",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Turbo · 4-step Sampler"
+    }
+  },
+  "60": {
+    "inputs": {
+      "samples": [
+        "50",
+        0
+      ],
+      "vae": [
+        "31",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Decode"
+    }
+  },
+  "70": {
+    "inputs": {
+      "filename_prefix": "Qwen_Image_2_1_Turbo",
+      "images": [
+        "60",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image (converted to websocket by worker)"
+    }
+  }
+}

@@ -80,6 +80,9 @@ RUN if [ -f ComfyUI-GGUF/requirements.txt ]; then \
             --no-cache-dir -r ComfyUI-Prompt-Enhancer/requirements.txt; \
     fi
 
+# Small local scheduler node used by the premerged Viggle v0.2.1 Fast checkpoint.
+COPY src/custom_nodes/viggle_turbo_sigmas.py /comfyui/custom_nodes/viggle_turbo_sigmas.py
+
 # Use JamePeng's prebuilt CUDA 12.6 / Python 3.12 Linux wheel.
 # This avoids compiling llama.cpp during the RunPod image build (the previous
 # source build could consume a large part of RunPod's 30-minute build limit).
@@ -122,9 +125,11 @@ RUN mkdir -p \
     /tmp/qwen21-diffusion \
     /tmp/qwen21-encoder \
     /tmp/qwen21-vae \
-    /tmp/qwen21-pe
+    /tmp/qwen21-pe \
+    /tmp/qwen21-fast \
+    /tmp/qwen21-turbo
 
-# Download all Qwen Image 2.1 components in parallel.
+# Download shared Qwen Image 2.1 components plus Fast/Turbo diffusion profiles in parallel.
 RUN --mount=type=cache,target=/root/.cache/huggingface \
     set -eu; \
     \
@@ -166,12 +171,32 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-pe.log 2>&1 \
         & PID_PE=$!; \
     \
+    echo "[5/6] Fast · Viggle v0.2.1 premerged 6-step Q5_K_M GGUF"; \
+    hf download \
+        Abiray/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-GGUF \
+        qwen_image_2.1_turbo_Q5_K_M.gguf \
+        --local-dir /tmp/qwen21-fast \
+        --max-workers 2 \
+        > /tmp/qwen21-fast.log 2>&1 \
+        & PID_FAST=$!; \
+    \
+    echo "[6/6] Turbo · Viggle v0.1 premerged 4-step Q5_K_M GGUF"; \
+    hf download \
+        Abiray/Qwen-Image-2.1-viggle-4-steps-turbo-GGUF \
+        qwen_image_2.1_turbo_Q5_K_M.gguf \
+        --local-dir /tmp/qwen21-turbo \
+        --max-workers 2 \
+        > /tmp/qwen21-turbo.log 2>&1 \
+        & PID_TURBO=$!; \
+    \
     FAILED=0; \
     for ITEM in \
         "DIFFUSION:${PID_DIFFUSION}:/tmp/qwen21-diffusion.log" \
         "ENCODER:${PID_ENCODER}:/tmp/qwen21-encoder.log" \
         "VAE:${PID_VAE}:/tmp/qwen21-vae.log" \
-        "PROMPT_ENHANCER:${PID_PE}:/tmp/qwen21-pe.log"; do \
+        "PROMPT_ENHANCER:${PID_PE}:/tmp/qwen21-pe.log" \
+        "FAST:${PID_FAST}:/tmp/qwen21-fast.log" \
+        "TURBO:${PID_TURBO}:/tmp/qwen21-turbo.log"; do \
         NAME="${ITEM%%:*}"; \
         REST="${ITEM#*:}"; \
         PID="${REST%%:*}"; \
@@ -198,16 +223,24 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         /model-output/LLM/Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf; \
     mv /tmp/qwen21-pe/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf \
         /model-output/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf; \
+    mv /tmp/qwen21-fast/qwen_image_2.1_turbo_Q5_K_M.gguf \
+        /model-output/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf; \
+    mv /tmp/qwen21-turbo/qwen_image_2.1_turbo_Q5_K_M.gguf \
+        /model-output/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf; \
     \
     rm -rf \
         /tmp/qwen21-diffusion \
         /tmp/qwen21-encoder \
         /tmp/qwen21-vae \
         /tmp/qwen21-pe \
+        /tmp/qwen21-fast \
+        /tmp/qwen21-turbo \
         /tmp/qwen21-diffusion.log \
         /tmp/qwen21-encoder.log \
         /tmp/qwen21-vae.log \
-        /tmp/qwen21-pe.log
+        /tmp/qwen21-pe.log \
+        /tmp/qwen21-fast.log \
+        /tmp/qwen21-turbo.log
 
 
 # =============================================================================
@@ -225,6 +258,14 @@ RUN mkdir -p \
 COPY --from=model-downloader \
     /model-output/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf \
     /comfyui/models/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf
+
+COPY --from=model-downloader \
+    /model-output/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf \
+    /comfyui/models/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf
+
+COPY --from=model-downloader \
+    /model-output/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf \
+    /comfyui/models/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf
 
 COPY --from=model-downloader \
     /model-output/text_encoders/qwen3vl-8b-it-q4_k_m.gguf \
@@ -278,7 +319,9 @@ RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
 RUN echo "============================================================" \
     && echo "worker-comfyui Qwen Image 2.1 GGUF image ready" \
-    && echo "Diffusion: uncensored Q5_K_M GGUF" \
+    && echo "Quality: uncensored Q5_K_M GGUF · 25 steps" \
+    && echo "Fast: Viggle v0.2.1 Q5_K_M GGUF · 6 steps" \
+    && echo "Turbo: Viggle v0.1 Q5_K_M GGUF · 4 steps" \
     && echo "Encoder: Qwen3-VL 8B Q4_K_M GGUF" \
     && echo "Prompt enhancer: I2I Q4_K_M GGUF" \
     && echo "ComfyUI: ${COMFYUI_VERSION:-0.37.0}" \

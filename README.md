@@ -16,55 +16,52 @@ This project allows you to run ComfyUI workflows as a serverless API endpoint on
 
 ## Qwen Image 2.1 GGUF Worker
 
-The `qwen-image-2.1-gguf` branch is a dedicated Qwen Image 2.1 image-editing worker for RunPod Serverless.
+The `qwen-image-2.1-gguf` branch provides three Qwen Image 2.1 image-editing profiles for RunPod Serverless while sharing the same Qwen3-VL encoder, VAE and optional local I2I prompt enhancer.
 
-### Included models
+### Profiles
+
+| Profile | Diffusion | Sampling | Purpose |
+| --- | --- | --- | --- |
+| **Quality** | `qwen-image-2.1-UC-Q5_K_M.gguf` | 25 steps · Euler/simple · CFG 1 | Highest edit fidelity; current baseline |
+| **Fast** | `qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf` | Viggle v0.2.1 · exact 6-step sigma schedule · CFG-free | Default balance of quality and latency |
+| **Turbo** | `qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf` | Viggle v0.1 · 4 steps · Euler/simple · CFG 1 | Lowest latency / rapid iteration |
+
+Fast and Turbo are premerged/distilled GGUF checkpoints, so no runtime LoRA merge is required. Fast uses the current Viggle v0.2.1 6-step student. Turbo intentionally uses the older v0.1 4-step full-distillation checkpoint and trades more fidelity for latency.
+
+### Shared models
 
 | Component | Model |
 | --- | --- |
-| Diffusion | `qwen-image-2.1-UC-Q5_K_M.gguf` |
 | Qwen3-VL image/text encoder | `qwen3vl-8b-it-q4_k_m.gguf` |
 | Qwen3-VL vision projector | `mmproj-qwen3vl-8b-it-q8_0.gguf` |
 | I2I prompt enhancer | `Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf` |
 | Prompt-enhancer vision projector | `Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf` |
 | VAE | `qwen_image_2.1_vae_bf16.safetensors` |
 
-The image model uses the uncensored Q5_K_M quantization. The main Qwen3-VL encoder and the local image-aware prompt enhancer use Q4_K_M to reduce the baked image size and VRAM pressure.
+The prompt enhancer is optional per request. RadiantLunar can bypass it and wire the raw prompt directly to the Qwen Image 2.1 text encoder.
 
-The prompt enhancer runs locally through `llama-cpp-python`; no external LLM/API is required.
+### Workflows
 
-### ComfyUI / custom nodes
+- `workflows/qwen_image_2_1_quality.json`
+- `workflows/qwen_image_2_1_fast.json`
+- `workflows/qwen_image_2_1_turbo.json`
+- `workflows/qwen_image_2_1_edit_gguf.json` remains as the original Quality-compatible workflow for backwards compatibility.
+
+All profiles preserve the source image dimensions instead of forcing the old 1 MP browser resize.
+
+### Runtime
 
 - ComfyUI 0.37.0
 - `leejet/ComfyUI-GGUF`
 - `xiaowuapple-pixel/ComfyUI-Prompt-Enhancer`
-
-The Docker build installs JamePeng's prebuilt CUDA 12.6 / Python 3.12 Linux `llama-cpp-python` wheel (`0.3.49+cu126`). This provides the Qwen3.5/Qwen3-VL multimodal handlers required by the local GGUF prompt enhancer without compiling llama.cpp during the RunPod build.
-
-### Default edit workflow
-
-See:
-
-`workflows/qwen_image_2_1_edit_gguf.json`
-
-The default workflow:
-
-1. Loads the source image.
-2. Runs the Qwen Image 2.1 I2I GGUF prompt enhancer.
-3. Encodes the enhanced prompt and source image with Qwen3-VL Q4_K_M.
-4. Releases the text encoder from VRAM before diffusion.
-5. Loads Qwen Image 2.1 uncensored Q5_K_M.
-6. Uses the native `QwenImage21Cache`.
-7. Samples with 25 steps, CFG 1, Euler / simple.
-8. Preserves the source image dimensions (rounded only as required by Qwen 2.1) instead of forcing the old 1 MP resize.
+- Local `ViggleTurboSigmas` scheduler node for Fast mode
+- JamePeng prebuilt CUDA 12.6 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
 
 The existing RunPod input/output contract is unchanged.
 
 ### GPU target
 
-This image is primarily targeted at NVIDIA Ampere/Ada GPUs, especially an RTX 4090 24 GB. The llama.cpp CUDA wheel is built for SM 80, 86, 89 and 90.
-
-Blackwell SM 120 is intentionally not targeted by this CUDA 12.6 branch.
+Primarily NVIDIA Ampere/Ada GPUs, especially RTX 4090 24 GB. Blackwell SM120 is intentionally not targeted by this CUDA 12.6 branch.
 
 ## Table of Contents
 

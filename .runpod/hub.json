@@ -1,12 +1,12 @@
 {
   "title": "Qwen Image 2.1 GGUF - ComfyUI",
-  "description": "Qwen Image 2.1 image editing with uncensored Q5_K_M GGUF, Q4_K_M Qwen3-VL encoder, and local I2I prompt enhancer",
+  "description": "Qwen Image 2.1 editing with Quality (25-step), Fast (Viggle 6-step), Turbo (Viggle 4-step), GGUF encoder, and optional local I2I prompt enhancement",
   "type": "serverless",
   "category": "image",
   "iconUrl": "https://cpjrphpz3t5wbwfe.public.blob.vercel-storage.com/comfy-ui.png",
   "config": {
     "runsOn": "GPU",
-    "containerDiskInGb": 35,
+    "containerDiskInGb": 55,
     "gpuIds": "ADA_24",
     "gpuCount": 1,
     "allowedCudaVersions": [
