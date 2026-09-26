@@ -55,11 +55,15 @@ The profiles also tune the shared prompt-enhancer/runtime path:
 
 | Profile | PE mode | PE context | PE vision preview | Qwen cache |
 | --- | --- | --- | --- | --- |
-| **Quality** | Thinking, 400 plan tokens | 8192 | max 1024 px | GPU, lossless |
-| **Fast** | Direct (no thinking) | 8192 | max 768 px | GPU, lossless |
-| **Turbo** | Direct (no thinking) | 8192 | max 768 px | GPU, lossless |
+| **Quality** | Thinking, 400 plan tokens; 1536-token answer cap | 12288 | max 1024 px | GPU, lossless |
+| **Fast** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
+| **Turbo** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
 
 The PE preview is a separate resized tensor used only by the prompt enhancer. The full source image still feeds Qwen Image 2.1 conditioning, so this does not change the final edit canvas.
+
+### PE context safety
+
+The GGUF PE uses a 12288-token context (the plugin's native default) plus an explicit completion cap via `QwenImage21PESettings`: 1536 tokens for Quality and 1024 for Fast/Turbo. This prevents llama.cpp from allowing a runaway Direct completion to consume the remaining context and fail with `decode: failed to find a memory slot for batch of size 1`.
 
 ComfyUI starts with `--fast fp16_accumulation` by default. Set `COMFY_PERFORMANCE_ARGS=""` to disable it without rebuilding the image, or override the variable with another supported ComfyUI performance flag set.
 

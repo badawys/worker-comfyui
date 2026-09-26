@@ -27,7 +27,7 @@
       "I2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
       "Vision Model": "Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf",
       "GPU Offload Layers": -1,
-      "Context Length": "8192",
+      "Context Length": "12288",
       "System Prompt File": "",
       "Thinking": true,
       "Unload Model After Generation": true,
@@ -54,11 +54,29 @@
       "Image 1": [
         "11",
         0
+      ],
+      "pe_settings": [
+        "22",
+        0
       ]
     },
     "class_type": "QwenImage21PromptEnhancer",
     "_meta": {
       "title": "Enhance Edit Prompt"
+    }
+  },
+  "22": {
+    "inputs": {
+      "Sampling Preset": "Custom",
+      "Temperature": 1,
+      "Top P": 0.95,
+      "Top K": 20,
+      "Presence Penalty": 0,
+      "Max New Tokens": 1536
+    },
+    "class_type": "QwenImage21PESettings",
+    "_meta": {
+      "title": "PE Output Limit · 1536 tokens"
     }
   },
   "30": {
