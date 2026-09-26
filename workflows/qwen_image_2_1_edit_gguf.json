@@ -8,17 +8,30 @@
       "title": "Input Image"
     }
   },
+  "11": {
+    "inputs": {
+      "image": [
+        "10",
+        0
+      ],
+      "max_dimension": 1024
+    },
+    "class_type": "PEPreviewResize",
+    "_meta": {
+      "title": "PE Preview · 1024px max"
+    }
+  },
   "20": {
     "inputs": {
       "T2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
       "I2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
       "Vision Model": "Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf",
       "GPU Offload Layers": -1,
-      "Context Length": "16384",
+      "Context Length": "8192",
       "System Prompt File": "",
       "Thinking": true,
       "Unload Model After Generation": true,
-      "Plan Tokens": 800
+      "Plan Tokens": 400
     },
     "class_type": "QwenImage21PELoaderGGUF",
     "_meta": {
@@ -39,7 +52,7 @@
         0
       ],
       "Image 1": [
-        "10",
+        "11",
         0
       ]
     },
@@ -124,7 +137,7 @@
         "40",
         0
       ],
-      "device": "auto",
+      "device": "gpu",
       "dtype": "default"
     },
     "class_type": "QwenImage21Cache",
