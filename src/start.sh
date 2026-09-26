@@ -7,10 +7,18 @@ export LD_PRELOAD="${TCMALLOC}"
 # Ensure ComfyUI-Manager runs in offline network mode inside the container
 comfy-manager-set-mode offline || echo "worker-comfyui - Could not set ComfyUI-Manager network_mode" >&2
 
+python - <<'PY'
+import torch
+cuda = torch.version.cuda or "none"
+print(f"worker-comfyui: PyTorch {torch.__version__} / CUDA runtime {cuda}")
+if cuda == "none" or int(cuda.split(".")[0]) < 13:
+    raise SystemExit("worker-comfyui: PyTorch cu130+ is required by this branch")
+PY
+
 echo "worker-comfyui: Starting ComfyUI"
 
-# Allow operators to tweak verbosity; default is DEBUG.
-: "${COMFY_LOG_LEVEL:=DEBUG}"
+# Allow operators to tweak verbosity; INFO avoids unnecessary serverless log I/O.
+: "${COMFY_LOG_LEVEL:=INFO}"
 
 if [ -z "${COMFY_PERFORMANCE_ARGS+x}" ]; then
     COMFY_PERFORMANCE_ARGS="--fast fp16_accumulation"

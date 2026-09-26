@@ -12,13 +12,16 @@ ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 FROM ${BASE_IMAGE} AS comfy-base
 
 ARG COMFYUI_VERSION=0.37.0
-ARG CUDA_VERSION_FOR_COMFY=12.6
+ARG CUDA_VERSION_FOR_COMFY=13.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_PREFER_BINARY=1
 ENV PYTHONUNBUFFERED=1
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 ENV PIP_NO_INPUT=1
+# CUDA modules are loaded on first use instead of eagerly at process startup.
+# This reduces cold-start work and GPU memory overhead on serverless workers.
+ENV CUDA_MODULE_LOADING=LAZY
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -50,6 +53,10 @@ RUN uv pip install \
     wheel
 
 # ComfyUI 0.37.0 contains the native Qwen Image 2.1 nodes.
+# Install its PyTorch stack from the CUDA 13.0 index so comfy_kitchen can use
+# optimized CUDA kernels. The base image intentionally stays CUDA 12.6 because
+# the known-working Prompt Enhancer llama.cpp wheel is cu126; a CUDA 13 host
+# driver can execute both CUDA 12.6 and CUDA 13 user-space runtimes.
 RUN /usr/bin/yes | comfy \
         --workspace /comfyui \
         install \
@@ -299,7 +306,7 @@ RUN apt-get update \
 ENV CC=/usr/bin/gcc
 ENV CXX=/usr/bin/g++
 
-RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda)" \
+RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda); assert torch.version.cuda and int(torch.version.cuda.split('.')[0]) >= 13, 'PyTorch cu130+ is required for optimized ComfyUI CUDA kernels'" \
     && python -c "import runpod; print('RunPod SDK OK')" \
     && python -c "import gguf; print('ComfyUI-GGUF dependency OK')" \
     && python -c "import llama_cpp; print('llama-cpp-python:', llama_cpp.__version__)"

@@ -71,6 +71,16 @@ The handler already uses direct writes to `/comfyui/input`, websocket image outp
 
 Worker input normalization defaults to `COMFY_INPUT_MAX_DIMENSION=768` and `COMFY_INPUT_JPEG_QUALITY=92`. Set `COMFY_INPUT_MAX_DIMENSION=0` to disable the worker-side fallback.
 
+### CUDA 13 optimized runtime
+
+This branch now installs the **PyTorch cu130** stack through `comfy-cli --cuda-version 13.0` so ComfyUI can enable its optimized `comfy_kitchen` CUDA backend instead of falling back to eager kernels.
+
+The container base intentionally remains `nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04` because the Prompt Enhancer uses the known-working JamePeng `llama-cpp-python 0.3.49+cu126` wheel. On a CUDA 13-capable NVIDIA host driver, CUDA 12.6 llama.cpp and PyTorch cu130 can coexist: PyTorch brings its CUDA 13 user-space runtime while llama.cpp uses the CUDA 12.6 libraries from the base image.
+
+RunPod endpoint requirement: **Minimum CUDA version 13.0**. Do not allow CUDA 12.x hosts for this branch.
+
+`CUDA_MODULE_LOADING=LAZY` is enabled to reduce serverless startup work, and the default ComfyUI log level is now `INFO` instead of `DEBUG`.
+
 ### Runtime
 
 - ComfyUI 0.37.0
