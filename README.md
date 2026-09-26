@@ -49,6 +49,22 @@ The prompt enhancer is optional per request. RadiantLunar can bypass it and wire
 
 All profiles preserve the source image dimensions instead of forcing the old 1 MP browser resize.
 
+### Latency optimizations
+
+The profiles also tune the shared prompt-enhancer/runtime path:
+
+| Profile | PE mode | PE context | PE vision preview | Qwen cache |
+| --- | --- | --- | --- | --- |
+| **Quality** | Thinking, 400 plan tokens | 8192 | max 1024 px | GPU, lossless |
+| **Fast** | Direct (no thinking) | 8192 | max 768 px | GPU, lossless |
+| **Turbo** | Direct (no thinking) | 8192 | max 768 px | GPU, lossless |
+
+The PE preview is a separate resized tensor used only by the prompt enhancer. The full source image still feeds Qwen Image 2.1 conditioning, so this does not change the final edit canvas.
+
+ComfyUI starts with `--fast fp16_accumulation` by default. Set `COMFY_PERFORMANCE_ARGS=""` to disable it without rebuilding the image, or override the variable with another supported ComfyUI performance flag set.
+
+The handler already uses direct writes to `/comfyui/input`, websocket image output, in-memory result handling and direct S3 upload; the slower localhost multipart/history/view/temp-file path is retained only as a compatibility fallback.
+
 ### Runtime
 
 - ComfyUI 0.37.0

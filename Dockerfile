@@ -82,6 +82,7 @@ RUN if [ -f ComfyUI-GGUF/requirements.txt ]; then \
 
 # Small local scheduler node used by the premerged Viggle v0.2.1 Fast checkpoint.
 COPY src/custom_nodes/viggle_turbo_sigmas.py /comfyui/custom_nodes/viggle_turbo_sigmas.py
+COPY src/custom_nodes/pe_preview_resize.py /comfyui/custom_nodes/pe_preview_resize.py
 
 # Use JamePeng's prebuilt CUDA 12.6 / Python 3.12 Linux wheel.
 # This avoids compiling llama.cpp during the RunPod image build (the previous
