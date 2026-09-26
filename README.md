@@ -47,7 +47,7 @@ The prompt enhancer is optional per request. RadiantLunar can bypass it and wire
 - `workflows/qwen_image_2_1_turbo.json`
 - `workflows/qwen_image_2_1_edit_gguf.json` remains as the original Quality-compatible workflow for backwards compatibility.
 
-All profiles preserve the source image dimensions instead of forcing the old 1 MP browser resize.
+RadiantLunar now normalizes every uploaded image to a maximum 768px longest side while preserving aspect ratio. The worker enforces the same cap as a fallback for direct API callers.
 
 ### Latency optimizations
 
@@ -59,7 +59,7 @@ The profiles also tune the shared prompt-enhancer/runtime path:
 | **Fast** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
 | **Turbo** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
 
-The PE preview is a separate resized tensor used only by the prompt enhancer. The full source image still feeds Qwen Image 2.1 conditioning, so this does not change the final edit canvas.
+The PE preview remains a separate tensor used only by the prompt enhancer. Qwen Image 2.1 conditioning receives the normalized upload image; RadiantLunar caps that image to a 768px longest side while preserving aspect ratio.
 
 ### PE context safety
 
@@ -68,6 +68,8 @@ The GGUF PE uses a 12288-token context (the plugin's native default) plus an exp
 ComfyUI starts with `--fast fp16_accumulation` by default. Set `COMFY_PERFORMANCE_ARGS=""` to disable it without rebuilding the image, or override the variable with another supported ComfyUI performance flag set.
 
 The handler already uses direct writes to `/comfyui/input`, websocket image output, in-memory result handling and direct S3 upload; the slower localhost multipart/history/view/temp-file path is retained only as a compatibility fallback.
+
+Worker input normalization defaults to `COMFY_INPUT_MAX_DIMENSION=768` and `COMFY_INPUT_JPEG_QUALITY=92`. Set `COMFY_INPUT_MAX_DIMENSION=0` to disable the worker-side fallback.
 
 ### Runtime
 
