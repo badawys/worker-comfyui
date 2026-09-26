@@ -12,6 +12,77 @@
 
 This project allows you to run ComfyUI workflows as a serverless API endpoint on the RunPod platform. Submit workflows via API calls and receive generated images as base64 strings or S3 URLs.
 
+
+
+## Qwen Image 2.1 GGUF Worker
+
+The `qwen-image-2.1-gguf` branch provides three Qwen Image 2.1 image-editing profiles for RunPod Serverless while sharing the same Qwen3-VL encoder, VAE and optional local I2I prompt enhancer.
+
+### Profiles
+
+| Profile | Diffusion | Sampling | Purpose |
+| --- | --- | --- | --- |
+| **Quality** | `qwen-image-2.1-UC-Q5_K_M.gguf` | 25 steps · Euler/simple · CFG 1 | Highest edit fidelity; current baseline |
+| **Fast** | `qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf` | Viggle v0.2.1 · exact 6-step sigma schedule · CFG-free | Default balance of quality and latency |
+| **Turbo** | `qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf` | Viggle v0.1 · 4 steps · Euler/simple · CFG 1 | Lowest latency / rapid iteration |
+
+Fast and Turbo are premerged/distilled GGUF checkpoints, so no runtime LoRA merge is required. Fast uses the current Viggle v0.2.1 6-step student. Turbo intentionally uses the older v0.1 4-step full-distillation checkpoint and trades more fidelity for latency.
+
+### Shared models
+
+| Component | Model |
+| --- | --- |
+| Qwen3-VL image/text encoder | `qwen3vl-8b-it-q4_k_m.gguf` |
+| Qwen3-VL vision projector | `mmproj-qwen3vl-8b-it-q8_0.gguf` |
+| I2I prompt enhancer | `Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf` |
+| Prompt-enhancer vision projector | `Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf` |
+| VAE | `qwen_image_2.1_vae_bf16.safetensors` |
+
+The prompt enhancer is optional per request. RadiantLunar can bypass it and wire the raw prompt directly to the Qwen Image 2.1 text encoder.
+
+### Workflows
+
+- `workflows/qwen_image_2_1_quality.json`
+- `workflows/qwen_image_2_1_fast.json`
+- `workflows/qwen_image_2_1_turbo.json`
+- `workflows/qwen_image_2_1_edit_gguf.json` remains as the original Quality-compatible workflow for backwards compatibility.
+
+All profiles preserve the source image dimensions instead of forcing the old 1 MP browser resize.
+
+### Latency optimizations
+
+The profiles also tune the shared prompt-enhancer/runtime path:
+
+| Profile | PE mode | PE context | PE vision preview | Qwen cache |
+| --- | --- | --- | --- | --- |
+| **Quality** | Thinking, 400 plan tokens; 1536-token answer cap | 12288 | max 1024 px | GPU, lossless |
+| **Fast** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
+| **Turbo** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
+
+The PE preview is a separate resized tensor used only by the prompt enhancer. The full source image still feeds Qwen Image 2.1 conditioning, so this does not change the final edit canvas.
+
+### PE context safety
+
+The GGUF PE uses a 12288-token context (the plugin's native default) plus an explicit completion cap via `QwenImage21PESettings`: 1536 tokens for Quality and 1024 for Fast/Turbo. This prevents llama.cpp from allowing a runaway Direct completion to consume the remaining context and fail with `decode: failed to find a memory slot for batch of size 1`.
+
+ComfyUI starts with `--fast fp16_accumulation` by default. Set `COMFY_PERFORMANCE_ARGS=""` to disable it without rebuilding the image, or override the variable with another supported ComfyUI performance flag set.
+
+The handler already uses direct writes to `/comfyui/input`, websocket image output, in-memory result handling and direct S3 upload; the slower localhost multipart/history/view/temp-file path is retained only as a compatibility fallback.
+
+### Runtime
+
+- ComfyUI 0.37.0
+- `leejet/ComfyUI-GGUF`
+- `xiaowuapple-pixel/ComfyUI-Prompt-Enhancer`
+- Local `ViggleTurboSigmas` scheduler node for Fast mode
+- JamePeng prebuilt CUDA 12.6 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
+
+The existing RunPod input/output contract is unchanged.
+
+### GPU target
+
+Primarily NVIDIA Ampere/Ada GPUs, especially RTX 4090 24 GB. Blackwell SM120 is intentionally not targeted by this CUDA 12.6 branch.
+
 ## Table of Contents
 
 - [Quickstart](#quickstart)

@@ -1,38 +1,24 @@
 # syntax=docker/dockerfile:1.7
 
 # =============================================================================
-# Base Image
+# Qwen Image 2.1 GGUF RunPod worker
 # =============================================================================
 
 ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+# =============================================================================
+# ComfyUI base
+# =============================================================================
 
 FROM ${BASE_IMAGE} AS comfy-base
 
-
-# =============================================================================
-# Build Arguments
-# =============================================================================
-
-ARG COMFYUI_VERSION=latest
-ARG CUDA_VERSION_FOR_COMFY
-ARG ENABLE_PYTORCH_UPGRADE=false
-ARG PYTORCH_INDEX_URL
-
-
-# =============================================================================
-# Environment
-# =============================================================================
+ARG COMFYUI_VERSION=0.37.0
+ARG CUDA_VERSION_FOR_COMFY=12.6
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_PREFER_BINARY=1
 ENV PYTHONUNBUFFERED=1
 ENV CMAKE_BUILD_PARALLEL_LEVEL=8
 ENV PIP_NO_INPUT=1
-
-
-# =============================================================================
-# System Dependencies
-# =============================================================================
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -46,15 +32,9 @@ RUN apt-get update \
         libsm6 \
         libxext6 \
         libxrender1 \
-        ffmpeg \
     && ln -sf /usr/bin/python3.12 /usr/bin/python \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-
-# =============================================================================
-# UV / Python Environment
-# =============================================================================
 
 RUN wget -qO- https://astral.sh/uv/install.sh | sh \
     && ln -s /root/.local/bin/uv /usr/local/bin/uv \
@@ -63,407 +43,252 @@ RUN wget -qO- https://astral.sh/uv/install.sh | sh \
 
 ENV PATH="/opt/venv/bin:${PATH}"
 
-
-# =============================================================================
-# Comfy CLI
-# =============================================================================
-
 RUN uv pip install \
     comfy-cli \
     pip \
     setuptools \
     wheel
 
+# ComfyUI 0.37.0 contains the native Qwen Image 2.1 nodes.
+RUN /usr/bin/yes | comfy \
+        --workspace /comfyui \
+        install \
+        --version "${COMFYUI_VERSION}" \
+        --cuda-version "${CUDA_VERSION_FOR_COMFY}" \
+        --nvidia
+
+# comfy-cli owns /comfyui/.venv. Make that the one runtime environment for
+# ComfyUI, custom nodes and the RunPod handler so dependencies cannot diverge.
+ENV VIRTUAL_ENV=/comfyui/.venv
+ENV PATH="/comfyui/.venv/bin:/opt/venv/bin:${PATH}"
 
 # =============================================================================
-# Install ComfyUI
-# =============================================================================
-
-RUN if [ -n "${CUDA_VERSION_FOR_COMFY}" ]; then \
-        /usr/bin/yes | comfy \
-            --workspace /comfyui \
-            install \
-            --version "${COMFYUI_VERSION}" \
-            --cuda-version "${CUDA_VERSION_FOR_COMFY}" \
-            --nvidia; \
-    else \
-        /usr/bin/yes | comfy \
-            --workspace /comfyui \
-            install \
-            --version "${COMFYUI_VERSION}" \
-            --nvidia; \
-    fi
-
-
-# =============================================================================
-# Install ComfyUI Runtime Requirements
-#
-# Explicitly install ComfyUI requirements after comfy-cli installation.
-#
-# This ensures runtime dependencies such as:
-#
-# - SQLAlchemy
-# - Alembic
-# - aiohttp
-# - safetensors
-# - transformers
-# - other ComfyUI dependencies
-#
-# remain available even when ComfyUI adds new requirements.
-# =============================================================================
-
-RUN python -m pip install \
-        --no-cache-dir \
-        -r /comfyui/requirements.txt \
-    && python -c \
-        "import sqlalchemy, alembic; print('ComfyUI database dependencies OK')"
-
-
-# =============================================================================
-# Optional PyTorch Upgrade
-# =============================================================================
-
-RUN if [ "${ENABLE_PYTORCH_UPGRADE}" = "true" ]; then \
-        uv pip install \
-            --force-reinstall \
-            torch \
-            torchvision \
-            torchaudio \
-            --index-url "${PYTORCH_INDEX_URL}"; \
-    fi
-
-
-# =============================================================================
-# Custom Nodes
+# Qwen Image 2.1 custom nodes
 # =============================================================================
 
 WORKDIR /comfyui/custom_nodes
 
-RUN git clone \
-        --depth 1 \
-        https://github.com/cubiq/ComfyUI_essentials.git \
-    && git clone \
-        --depth 1 \
-        https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
-    && git clone \
-        --depth 1 \
-        https://github.com/kijai/ComfyUI-WanVideoWrapper.git
+RUN git clone --depth 1 https://github.com/leejet/ComfyUI-GGUF.git \
+    && git clone --depth 1 https://github.com/xiaowuapple-pixel/ComfyUI-Prompt-Enhancer.git
 
-
-# =============================================================================
-# Custom Node Requirements
-# =============================================================================
-
-RUN if [ -f ComfyUI_essentials/requirements.txt ]; then \
-        uv pip install \
-            --no-cache-dir \
-            -r ComfyUI_essentials/requirements.txt; \
+RUN if [ -f ComfyUI-GGUF/requirements.txt ]; then \
+        uv pip install --python /comfyui/.venv/bin/python \
+            --no-cache-dir -r ComfyUI-GGUF/requirements.txt; \
     fi \
-    && if [ -f ComfyUI-VideoHelperSuite/requirements.txt ]; then \
-        uv pip install \
-            --no-cache-dir \
-            -r ComfyUI-VideoHelperSuite/requirements.txt; \
-    fi \
-    && if [ -f ComfyUI-WanVideoWrapper/requirements.txt ]; then \
-        uv pip install \
-            --no-cache-dir \
-            -r ComfyUI-WanVideoWrapper/requirements.txt; \
+    && if [ -f ComfyUI-Prompt-Enhancer/requirements.txt ]; then \
+        uv pip install --python /comfyui/.venv/bin/python \
+            --no-cache-dir -r ComfyUI-Prompt-Enhancer/requirements.txt; \
     fi
 
+# Small local scheduler node used by the premerged Viggle v0.2.1 Fast checkpoint.
+COPY src/custom_nodes/viggle_turbo_sigmas.py /comfyui/custom_nodes/viggle_turbo_sigmas.py
+COPY src/custom_nodes/pe_preview_resize.py /comfyui/custom_nodes/pe_preview_resize.py
 
-# =============================================================================
-# RunPod Worker Runtime Dependencies
-# =============================================================================
+# Use JamePeng's prebuilt CUDA 12.6 / Python 3.12 Linux wheel.
+# This avoids compiling llama.cpp during the RunPod image build (the previous
+# source build could consume a large part of RunPod's 30-minute build limit).
+ARG LLAMA_CPP_WHEEL_URL=https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49%2Bcu126-cp312-cp312-linux_x86_64.whl
 
+RUN uv pip install --python /comfyui/.venv/bin/python \
+        "${LLAMA_CPP_WHEEL_URL}" \
+    && uv pip install --python /comfyui/.venv/bin/python \
+        sentencepiece \
+        protobuf
+
+# RunPod worker dependencies live in the same environment as ComfyUI.
 WORKDIR /
 
-RUN uv pip install \
+RUN uv pip install --python /comfyui/.venv/bin/python \
     runpod \
     requests \
     websocket-client
 
 
 # =============================================================================
-# =============================================================================
-# Model Downloader Stage
-#
-# Current production image:
-#
-#   Qwen Image Edit 2511
-#
-# WAN is intentionally disabled for now.
-#
-# Keeping this stage separate means changes to:
-#
-# - handler.py
-# - start.sh
-# - helper scripts
-# - runtime dependencies
-#
-# do not need to re-download the Qwen models when Docker cache is available.
-# =============================================================================
+# Model downloader
 # =============================================================================
 
 FROM comfy-base AS model-downloader
-
-
-# =============================================================================
-# Hugging Face Downloader
-# =============================================================================
 
 ENV HF_HUB_DOWNLOAD_TIMEOUT=600
 ENV HF_HUB_ETAG_TIMEOUT=60
 ENV HF_HUB_DISABLE_UPDATE_CHECK=1
 
-RUN uv pip install \
+RUN uv pip install --python /comfyui/.venv/bin/python \
     huggingface_hub \
     hf_xet
 
-
-# =============================================================================
-# Model Output / Temporary Directories
-# =============================================================================
-
 RUN mkdir -p \
-    /model-output/unet \
-    /model-output/clip \
+    /model-output/diffusion_models \
+    /model-output/text_encoders \
     /model-output/vae \
-    /model-output/loras \
-    /tmp/qwen-edit \
-    /tmp/qwen-base \
-    /tmp/qwen-lora \
-    /tmp/qwen-nsfw
+    /model-output/LLM \
+    /tmp/qwen21-diffusion \
+    /tmp/qwen21-encoder \
+    /tmp/qwen21-vae \
+    /tmp/qwen21-pe \
+    /tmp/qwen21-fast \
+    /tmp/qwen21-turbo
 
-
-# =============================================================================
-# Download Qwen Image Edit 2511
-#
-# Four independent Hugging Face jobs are started in parallel:
-#
-# 1. Qwen Image Edit diffusion model
-# 2. Qwen text encoder + VAE
-# 3. Qwen Image Edit 2511 Lightning 8-step LoRA
-# 4. Qwen Image Edit 2511 NSFW LoRA
-#
-# All repositories are public, so no Hugging Face token is required.
-# =============================================================================
-
+# Download shared Qwen Image 2.1 components plus Fast/Turbo diffusion profiles in parallel.
 RUN --mount=type=cache,target=/root/.cache/huggingface \
     set -eu; \
     \
-    echo "============================================================"; \
-    echo "Downloading Qwen Image Edit 2511"; \
-    echo "============================================================"; \
-    \
-    echo "[1/4] Starting Qwen Image Edit 2511 diffusion model..."; \
+    echo "[1/4] Qwen Image 2.1 uncensored Q5_K_M diffusion"; \
     hf download \
-        Comfy-Org/Qwen-Image-Edit_ComfyUI \
-        split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
-        --local-dir /tmp/qwen-edit \
+        abenzerps/Qwen-Image-2.1-Uncensored-GGUF \
+        qwen-image-2.1-UC-Q5_K_M.gguf \
+        --local-dir /tmp/qwen21-diffusion \
         --max-workers 2 \
-        > /tmp/qwen-edit.log 2>&1 \
-        & PID_QWEN_EDIT=$!; \
+        > /tmp/qwen21-diffusion.log 2>&1 \
+        & PID_DIFFUSION=$!; \
     \
-    echo "[2/4] Starting Qwen text encoder + VAE..."; \
+    echo "[2/4] Qwen3-VL 8B Q4_K_M encoder + vision projector"; \
     hf download \
-        Comfy-Org/Qwen-Image_ComfyUI \
-        split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
-        split_files/vae/qwen_image_vae.safetensors \
-        --local-dir /tmp/qwen-base \
+        gguf-org/qwen-image-2.1-gguf \
+        qwen3vl-8b-it-q4_k_m.gguf \
+        mmproj-qwen3vl-8b-it-q8_0.gguf \
+        --local-dir /tmp/qwen21-encoder \
         --max-workers 2 \
-        > /tmp/qwen-base.log 2>&1 \
-        & PID_QWEN_BASE=$!; \
+        > /tmp/qwen21-encoder.log 2>&1 \
+        & PID_ENCODER=$!; \
     \
-    echo "[3/4] Starting Qwen 2511 Lightning 8-step LoRA..."; \
+    echo "[3/4] Official Qwen Image 2.1 VAE"; \
     hf download \
-        lightx2v/Qwen-Image-Edit-2511-Lightning \
-        Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
-        --local-dir /tmp/qwen-lora \
+        Comfy-Org/Qwen-Image-2.1 \
+        vae/qwen_image_2.1_vae_bf16.safetensors \
+        --local-dir /tmp/qwen21-vae \
         --max-workers 2 \
-        > /tmp/qwen-lora.log 2>&1 \
-        & PID_QWEN_LORA=$!; \
+        > /tmp/qwen21-vae.log 2>&1 \
+        & PID_VAE=$!; \
     \
-    echo "[4/4] Starting Qwen 2511 NSFW LoRA..."; \
+    echo "[4/4] Qwen Image 2.1 I2I prompt enhancer Q4_K_M + projector"; \
     hf download \
-        aiunivers/qwen-image-edit-plus-nsfw-lora \
-        qwen-image-edit-plus-nsfw-lora.safetensors \
-        --local-dir /tmp/qwen-nsfw \
+        prithivMLmods/Qwen-Image-2.1-PE-I2I-GGUF \
+        Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf \
+        Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf \
+        --local-dir /tmp/qwen21-pe \
         --max-workers 2 \
-        > /tmp/qwen-nsfw.log 2>&1 \
-        & PID_QWEN_NSFW=$!; \
+        > /tmp/qwen21-pe.log 2>&1 \
+        & PID_PE=$!; \
     \
-    echo ""; \
-    echo "All Qwen downloads started."; \
-    echo "Waiting for completion..."; \
-    echo ""; \
+    echo "[5/6] Fast · Viggle v0.2.1 premerged 6-step Q5_K_M GGUF"; \
+    hf download \
+        Abiray/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-GGUF \
+        qwen_image_2.1_turbo_Q5_K_M.gguf \
+        --local-dir /tmp/qwen21-fast \
+        --max-workers 2 \
+        > /tmp/qwen21-fast.log 2>&1 \
+        & PID_FAST=$!; \
+    \
+    echo "[6/6] Turbo · Viggle v0.1 premerged 4-step Q5_K_M GGUF"; \
+    hf download \
+        Abiray/Qwen-Image-2.1-viggle-4-steps-turbo-GGUF \
+        qwen_image_2.1_turbo_Q5_K_M.gguf \
+        --local-dir /tmp/qwen21-turbo \
+        --max-workers 2 \
+        > /tmp/qwen21-turbo.log 2>&1 \
+        & PID_TURBO=$!; \
     \
     FAILED=0; \
+    for ITEM in \
+        "DIFFUSION:${PID_DIFFUSION}:/tmp/qwen21-diffusion.log" \
+        "ENCODER:${PID_ENCODER}:/tmp/qwen21-encoder.log" \
+        "VAE:${PID_VAE}:/tmp/qwen21-vae.log" \
+        "PROMPT_ENHANCER:${PID_PE}:/tmp/qwen21-pe.log" \
+        "FAST:${PID_FAST}:/tmp/qwen21-fast.log" \
+        "TURBO:${PID_TURBO}:/tmp/qwen21-turbo.log"; do \
+        NAME="${ITEM%%:*}"; \
+        REST="${ITEM#*:}"; \
+        PID="${REST%%:*}"; \
+        LOG="${REST#*:}"; \
+        if wait "${PID}"; then \
+            echo "[OK] ${NAME}"; \
+        else \
+            echo "[ERROR] ${NAME}"; \
+            cat "${LOG}" || true; \
+            FAILED=1; \
+        fi; \
+    done; \
+    test "${FAILED}" -eq 0; \
     \
-    if wait "${PID_QWEN_EDIT}"; then \
-        echo "[OK] Qwen Image Edit 2511 diffusion model"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] Qwen Image Edit 2511 failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/qwen-edit.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    if wait "${PID_QWEN_BASE}"; then \
-        echo "[OK] Qwen text encoder + VAE"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] Qwen text encoder / VAE failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/qwen-base.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    if wait "${PID_QWEN_LORA}"; then \
-        echo "[OK] Qwen Image Edit 2511 Lightning LoRA"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] Qwen Lightning LoRA failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/qwen-lora.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    if wait "${PID_QWEN_NSFW}"; then \
-        echo "[OK] Qwen Image Edit 2511 NSFW LoRA"; \
-    else \
-        STATUS=$?; \
-        echo "============================================================"; \
-        echo "[ERROR] Qwen NSFW LoRA failed: ${STATUS}"; \
-        echo "============================================================"; \
-        cat /tmp/qwen-nsfw.log || true; \
-        FAILED=1; \
-    fi; \
-    \
-    if [ "${FAILED}" -ne 0 ]; then \
-        echo ""; \
-        echo "============================================================"; \
-        echo "ONE OR MORE MODEL DOWNLOADS FAILED"; \
-        echo "============================================================"; \
-        exit 1; \
-    fi; \
-    \
-    echo ""; \
-    echo "============================================================"; \
-    echo "All Qwen downloads completed."; \
-    echo "Moving models into stable output directories..."; \
-    echo "============================================================"; \
-    \
-    mv \
-        /tmp/qwen-edit/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
-        /model-output/unet/qwen_image_edit_2511_fp8mixed.safetensors; \
-    \
-    mv \
-        /tmp/qwen-base/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
-        /model-output/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors; \
-    \
-    mv \
-        /tmp/qwen-base/split_files/vae/qwen_image_vae.safetensors \
-        /model-output/vae/qwen_image_vae.safetensors; \
-    \
-    mv \
-        /tmp/qwen-lora/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
-        /model-output/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors; \
-    \
-    mv \
-        /tmp/qwen-nsfw/qwen-image-edit-plus-nsfw-lora.safetensors \
-        /model-output/loras/qwen-image-edit-plus-nsfw-lora.safetensors; \
+    mv /tmp/qwen21-diffusion/qwen-image-2.1-UC-Q5_K_M.gguf \
+        /model-output/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf; \
+    mv /tmp/qwen21-encoder/qwen3vl-8b-it-q4_k_m.gguf \
+        /model-output/text_encoders/qwen3vl-8b-it-q4_k_m.gguf; \
+    mv /tmp/qwen21-encoder/mmproj-qwen3vl-8b-it-q8_0.gguf \
+        /model-output/text_encoders/mmproj-qwen3vl-8b-it-q8_0.gguf; \
+    mv /tmp/qwen21-vae/vae/qwen_image_2.1_vae_bf16.safetensors \
+        /model-output/vae/qwen_image_2.1_vae_bf16.safetensors; \
+    mv /tmp/qwen21-pe/Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf \
+        /model-output/LLM/Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf; \
+    mv /tmp/qwen21-pe/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf \
+        /model-output/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf; \
+    mv /tmp/qwen21-fast/qwen_image_2.1_turbo_Q5_K_M.gguf \
+        /model-output/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf; \
+    mv /tmp/qwen21-turbo/qwen_image_2.1_turbo_Q5_K_M.gguf \
+        /model-output/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf; \
     \
     rm -rf \
-        /tmp/qwen-edit \
-        /tmp/qwen-base \
-        /tmp/qwen-lora \
-        /tmp/qwen-nsfw \
-        /tmp/qwen-edit.log \
-        /tmp/qwen-base.log \
-        /tmp/qwen-lora.log \
-        /tmp/qwen-nsfw.log; \
-    \
-    echo ""; \
-    echo "============================================================"; \
-    echo "QWEN MODELS READY"; \
-    echo "============================================================"; \
-    echo "qwen_image_edit_2511_fp8mixed.safetensors"; \
-    echo "qwen_2.5_vl_7b_fp8_scaled.safetensors"; \
-    echo "qwen_image_vae.safetensors"; \
-    echo "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"; \
-    echo "qwen-image-edit-plus-nsfw-lora.safetensors"; \
-    echo "============================================================"
+        /tmp/qwen21-diffusion \
+        /tmp/qwen21-encoder \
+        /tmp/qwen21-vae \
+        /tmp/qwen21-pe \
+        /tmp/qwen21-fast \
+        /tmp/qwen21-turbo \
+        /tmp/qwen21-diffusion.log \
+        /tmp/qwen21-encoder.log \
+        /tmp/qwen21-vae.log \
+        /tmp/qwen21-pe.log \
+        /tmp/qwen21-fast.log \
+        /tmp/qwen21-turbo.log
 
 
 # =============================================================================
-# =============================================================================
-# Final Production Image
-#
-# Large model COPY commands intentionally come before:
-#
-# - C compiler/runtime dependencies
-# - handler.py
-# - start.sh
-# - helper scripts
-#
-# This preserves Docker layer caching for the large model weights.
-# =============================================================================
+# Final production image
 # =============================================================================
 
 FROM comfy-base AS final
 
-
-# =============================================================================
-# Standard ComfyUI Model Directories
-# =============================================================================
-
 RUN mkdir -p \
-    /comfyui/models/unet \
-    /comfyui/models/clip \
+    /comfyui/models/diffusion_models \
+    /comfyui/models/text_encoders \
     /comfyui/models/vae \
-    /comfyui/models/loras
-
-
-# =============================================================================
-# Qwen Image Edit 2511
-# =============================================================================
+    /comfyui/models/LLM
 
 COPY --from=model-downloader \
-    /model-output/unet/qwen_image_edit_2511_fp8mixed.safetensors \
-    /comfyui/models/unet/qwen_image_edit_2511_fp8mixed.safetensors
+    /model-output/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf \
+    /comfyui/models/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf
 
 COPY --from=model-downloader \
-    /model-output/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors \
-    /comfyui/models/clip/qwen_2.5_vl_7b_fp8_scaled.safetensors
+    /model-output/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf \
+    /comfyui/models/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf
 
 COPY --from=model-downloader \
-    /model-output/vae/qwen_image_vae.safetensors \
-    /comfyui/models/vae/qwen_image_vae.safetensors
+    /model-output/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf \
+    /comfyui/models/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf
 
 COPY --from=model-downloader \
-    /model-output/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
-    /comfyui/models/loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors
+    /model-output/text_encoders/qwen3vl-8b-it-q4_k_m.gguf \
+    /comfyui/models/text_encoders/qwen3vl-8b-it-q4_k_m.gguf
 
 COPY --from=model-downloader \
-    /model-output/loras/qwen-image-edit-plus-nsfw-lora.safetensors \
-    /comfyui/models/loras/qwen-image-edit-plus-nsfw-lora.safetensors
+    /model-output/text_encoders/mmproj-qwen3vl-8b-it-q8_0.gguf \
+    /comfyui/models/text_encoders/mmproj-qwen3vl-8b-it-q8_0.gguf
 
+COPY --from=model-downloader \
+    /model-output/vae/qwen_image_2.1_vae_bf16.safetensors \
+    /comfyui/models/vae/qwen_image_2.1_vae_bf16.safetensors
 
-# =============================================================================
-# Runtime Build Tools
-#
-# Triton JIT compilation requires a C compiler at inference time.
-#
-# The NVIDIA CUDA runtime image intentionally does not contain GCC/G++.
-#
-# These tools are intentionally installed AFTER the model layers so this
-# runtime layer can change without invalidating the huge Qwen layers.
-# =============================================================================
+COPY --from=model-downloader \
+    /model-output/LLM/Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf \
+    /comfyui/models/LLM/Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf
 
+COPY --from=model-downloader \
+    /model-output/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf \
+    /comfyui/models/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf
+
+# Keep a compiler available for PyTorch/Triton JIT kernels.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -474,59 +299,10 @@ RUN apt-get update \
 ENV CC=/usr/bin/gcc
 ENV CXX=/usr/bin/g++
 
-
-# =============================================================================
-# Custom Node Runtime Dependencies
-#
-# Fixes:
-#
-# ComfyUI-VideoHelperSuite:
-#     ModuleNotFoundError: No module named 'cv2'
-#
-# ComfyUI-WanVideoWrapper:
-#     ModuleNotFoundError: No module named 'accelerate'
-#
-# OpenCV headless is used because this is a serverless environment.
-# =============================================================================
-
-RUN uv pip install \
-    --no-cache-dir \
-    opencv-python-headless \
-    imageio-ffmpeg \
-    accelerate
-
-
-# =============================================================================
-# Runtime Verification
-#
-# Fail the Docker build immediately if these important runtime dependencies
-# are not available.
-# =============================================================================
-
-RUN echo "============================================================" \
-    && echo "Verifying runtime dependencies..." \
-    && echo "============================================================" \
-    && gcc --version \
-    && g++ --version \
-    && python -c "import sqlalchemy; print('SQLAlchemy OK:', sqlalchemy.__version__)" \
-    && python -c "import alembic; print('Alembic OK:', alembic.__version__)" \
-    && python -c "import cv2; print('OpenCV OK:', cv2.__version__)" \
-    && python -c "import accelerate; print('Accelerate OK:', accelerate.__version__)" \
-    && python -c "import torch; print('PyTorch OK:', torch.__version__)" \
-    && python -c "import triton; print('Triton OK:', triton.__version__)" \
-    && echo "============================================================" \
-    && echo "Runtime dependency verification passed." \
-    && echo "============================================================"
-
-
-# =============================================================================
-# Worker Files
-#
-# Keep frequently changing application files at the end.
-#
-# Updating handler.py or start.sh will therefore only invalidate these small
-# final layers.
-# =============================================================================
+RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda)" \
+    && python -c "import runpod; print('RunPod SDK OK')" \
+    && python -c "import gguf; print('ComfyUI-GGUF dependency OK')" \
+    && python -c "import llama_cpp; print('llama-cpp-python:', llama_cpp.__version__)"
 
 WORKDIR /
 
@@ -536,42 +312,20 @@ COPY test_input.json /test_input.json
 
 RUN chmod +x /start.sh
 
-
-# =============================================================================
-# Helper Scripts
-# =============================================================================
-
-COPY scripts/comfy-node-install.sh \
-    /usr/local/bin/comfy-node-install
-
+COPY scripts/comfy-node-install.sh /usr/local/bin/comfy-node-install
 RUN chmod +x /usr/local/bin/comfy-node-install
 
-
-COPY scripts/comfy-manager-set-mode.sh \
-    /usr/local/bin/comfy-manager-set-mode
-
+COPY scripts/comfy-manager-set-mode.sh /usr/local/bin/comfy-manager-set-mode
 RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
-
-# =============================================================================
-# Final Image Information
-# =============================================================================
-
 RUN echo "============================================================" \
-    && echo "worker-comfyui production image ready" \
-    && echo "Qwen Image Edit 2511: enabled" \
-    && echo "Lightning 8-step LoRA: enabled" \
-    && echo "NSFW LoRA: enabled" \
-    && echo "Triton runtime compiler: enabled" \
-    && echo "OpenCV: enabled" \
-    && echo "Accelerate: enabled" \
+    && echo "worker-comfyui Qwen Image 2.1 GGUF image ready" \
+    && echo "Quality: uncensored Q5_K_M GGUF · 25 steps" \
+    && echo "Fast: Viggle v0.2.1 Q5_K_M GGUF · 6 steps" \
+    && echo "Turbo: Viggle v0.1 Q5_K_M GGUF · 4 steps" \
+    && echo "Encoder: Qwen3-VL 8B Q4_K_M GGUF" \
+    && echo "Prompt enhancer: I2I Q4_K_M GGUF" \
+    && echo "ComfyUI: ${COMFYUI_VERSION:-0.37.0}" \
     && echo "============================================================"
-
-
-# =============================================================================
-# Start
-# =============================================================================
-
-WORKDIR /
 
 CMD ["/start.sh"]

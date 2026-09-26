@@ -1,15 +1,18 @@
 {
-  "title": "ComfyUI",
-  "description": "Generate images with ComfyUI using FLUX.1-dev (fp8)",
+  "title": "Qwen Image 2.1 GGUF - ComfyUI",
+  "description": "Qwen Image 2.1 editing with Quality (25-step), Fast (Viggle 6-step), Turbo (Viggle 4-step), GGUF encoder, and optional local I2I prompt enhancement",
   "type": "serverless",
   "category": "image",
   "iconUrl": "https://cpjrphpz3t5wbwfe.public.blob.vercel-storage.com/comfy-ui.png",
   "config": {
     "runsOn": "GPU",
-    "containerDiskInGb": 20,
+    "containerDiskInGb": 55,
     "gpuIds": "ADA_24",
     "gpuCount": 1,
-    "allowedCudaVersions": ["12.7", "12.6"],
+    "allowedCudaVersions": [
+      "12.7",
+      "12.6"
+    ],
     "env": [
       {
         "key": "COMFY_ORG_API_KEY",
