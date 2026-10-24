@@ -24,9 +24,9 @@ The `qwen-image-2.1-gguf` branch provides three Qwen Image 2.1 image-editing pro
 | --- | --- | --- | --- |
 | **Quality** | `qwen-image-2.1-UC-Q5_K_M.gguf` | 25 steps · Euler/simple · CFG 1 | Highest edit fidelity; current baseline |
 | **Fast** | `qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf` | Viggle v0.2.1 · exact 6-step sigma schedule · CFG-free | Default balance of quality and latency |
-| **Turbo** | `qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf` | Viggle v0.1 · 4 steps · Euler/simple · CFG 1 | Lowest latency / rapid iteration |
+| **Turbo** | `qwen_image_2.1-Turbo-Q5_K_M.gguf` | Official 8-step sigma schedule · Euler · CFG 1 | Qwen Image 2.1 Turbo |
 
-Fast and Turbo are premerged/distilled GGUF checkpoints, so no runtime LoRA merge is required. Fast uses the current Viggle v0.2.1 6-step student. Turbo intentionally uses the older v0.1 4-step full-distillation checkpoint and trades more fidelity for latency.
+Fast and Turbo are distilled GGUF checkpoints, so no runtime LoRA merge is required. Fast uses the Viggle v0.2.1 6-step student. Turbo uses the Q5_K_M quantization from [VantageWithAI](https://huggingface.co/vantagewithai/Qwen-Image-2.1-turbo-ComfyUI-GGUF) of Qwen’s official Turbo checkpoint. Its `ManualSigmas` node supplies the [checkpoint’s saved schedule](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/model_index.json) directly: `1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`. Do not replace it with an 8-step `simple` scheduler or the resolution-shifted Viggle schedule.
 
 ### Shared models
 
@@ -79,7 +79,7 @@ Worker input normalization defaults to `COMFY_INPUT_MAX_DIMENSION=768` and `COMF
 - Local `ViggleTurboSigmas` scheduler node for Fast mode
 - JamePeng prebuilt CUDA 12.6 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
 
-The existing RunPod input/output contract is unchanged.
+Rebuild and deploy the worker image before sending the updated RadiantLunar Turbo workflow: older images contain the retired Viggle checkpoint rather than `qwen_image_2.1-Turbo-Q5_K_M.gguf`. The existing RunPod input/output contract is unchanged.
 
 ### GPU target
 

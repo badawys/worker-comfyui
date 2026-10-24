@@ -181,10 +181,10 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-fast.log 2>&1 \
         & PID_FAST=$!; \
     \
-    echo "[6/6] Turbo · Viggle v0.1 premerged 4-step Q5_K_M GGUF"; \
+    echo "[6/6] Turbo · Qwen Image 2.1 Turbo 8-step Q5_K_M GGUF"; \
     hf download \
-        Abiray/Qwen-Image-2.1-viggle-4-steps-turbo-GGUF \
-        qwen_image_2.1_turbo_Q5_K_M.gguf \
+        vantagewithai/Qwen-Image-2.1-turbo-ComfyUI-GGUF \
+        qwen_image_2.1-Turbo-Q5_K_M.gguf \
         --local-dir /tmp/qwen21-turbo \
         --max-workers 2 \
         > /tmp/qwen21-turbo.log 2>&1 \
@@ -226,8 +226,8 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         /model-output/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf; \
     mv /tmp/qwen21-fast/qwen_image_2.1_turbo_Q5_K_M.gguf \
         /model-output/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf; \
-    mv /tmp/qwen21-turbo/qwen_image_2.1_turbo_Q5_K_M.gguf \
-        /model-output/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf; \
+    mv /tmp/qwen21-turbo/qwen_image_2.1-Turbo-Q5_K_M.gguf \
+        /model-output/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf; \
     \
     rm -rf \
         /tmp/qwen21-diffusion \
@@ -265,8 +265,8 @@ COPY --from=model-downloader \
     /comfyui/models/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf
 
 COPY --from=model-downloader \
-    /model-output/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf \
-    /comfyui/models/diffusion_models/qwen_image_2.1_turbo_v0.1_Q5_K_M.gguf
+    /model-output/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf \
+    /comfyui/models/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf
 
 COPY --from=model-downloader \
     /model-output/text_encoders/qwen3vl-8b-it-q4_k_m.gguf \
@@ -322,7 +322,7 @@ RUN echo "============================================================" \
     && echo "worker-comfyui Qwen Image 2.1 GGUF image ready" \
     && echo "Quality: uncensored Q5_K_M GGUF · 25 steps" \
     && echo "Fast: Viggle v0.2.1 Q5_K_M GGUF · 6 steps" \
-    && echo "Turbo: Viggle v0.1 Q5_K_M GGUF · 4 steps" \
+    && echo "Turbo: Qwen Image 2.1 Turbo Q5_K_M GGUF · 8 steps" \
     && echo "Encoder: Qwen3-VL 8B Q4_K_M GGUF" \
     && echo "Prompt enhancer: I2I Q4_K_M GGUF" \
     && echo "ComfyUI: ${COMFYUI_VERSION:-0.37.0}" \
