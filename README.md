@@ -22,11 +22,19 @@ The `qwen-image-2.1-gguf` branch provides three Qwen Image 2.1 image-editing pro
 
 | Profile | Diffusion | Sampling | Purpose |
 | --- | --- | --- | --- |
-| **Quality** | `qwen-image-2.1-UC-Q5_K_M.gguf` | 25 steps · Euler/simple · CFG 1 | Highest edit fidelity; current baseline |
+| **Quality** | `qwen-image-2.1-UC-Q5_K_M.gguf` + official Turbo LoRA | Official 8-step sigma schedule · Euler · CFG 1 · LoRA strength 1 | Existing Quality checkpoint with accelerated sampling |
 | **Fast** | `qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf` | Viggle v0.2.1 · exact 6-step sigma schedule · CFG-free | Default balance of quality and latency |
 | **Turbo** | `qwen_image_2.1-Turbo-Q5_K_M.gguf` | Official 8-step sigma schedule · Euler · CFG 1 | Qwen Image 2.1 Turbo |
 
 Fast and Turbo are distilled GGUF checkpoints, so no runtime LoRA merge is required. Fast uses the Viggle v0.2.1 6-step student. Turbo uses the Q5_K_M quantization from [VantageWithAI](https://huggingface.co/vantagewithai/Qwen-Image-2.1-turbo-ComfyUI-GGUF) of Qwen’s official Turbo checkpoint. Its `ManualSigmas` node supplies the [checkpoint’s saved schedule](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/model_index.json) directly: `1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`. Do not replace it with an 8-step `simple` scheduler or the resolution-shifted Viggle schedule.
+
+Quality applies the [official extracted Turbo LoRA](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors) at `strength_model=1.0` through `LoraLoaderModelOnly`, between `UnetLoaderGGUF` and `QwenImage21Cache`. It uses the same `CFGGuider` (CFG 1), `RandomNoise`, `KSamplerSelect` (Euler), `ManualSigmas`, and `SamplerCustomAdvanced` path as Turbo. The source-image latent and lossless GPU prefix cache remain connected. The LoRA is applied only to Quality; do not stack it onto the already distilled Fast or Turbo models.
+
+The [Comfy-Org model card](https://huggingface.co/Comfy-Org/Qwen-Image-2.1#turbo) specifies 8 steps and CFG 1 for either route. The [official image-edit template](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_qwen_image_2_1_turbo_image_edit.json) supplies the exact manual sigma schedule. At CFG 1 negative conditioning is skipped; increasing CFG or changing schedules is not part of this baseline. This reduces Quality denoising from 25 to 8 evaluations, but total latency and fidelity on the modified Quality checkpoint still need a GPU comparison.
+
+### Quality LoRA compatibility
+
+The Quality GGUF stores separate `img_mlp.gate_layer` and `img_mlp.proj` tensors. The official LoRA stores fused `img_mlp.gate_up` adapters, which can be silently skipped by the current ComfyUI mapping ([upstream issue #16944](https://github.com/Comfy-Org/ComfyUI/issues/16944)). The model-downloader stage runs `scripts/prepare_qwen21_turbo_lora.py` once to split all 32 MLP adapters: split `lora_up` row-wise and duplicate `lora_down` and `alpha`. This preserves the adapter matrix products, BF16 precision, rank and scale without numerical conversion or retraining. The prepared file is stored in `models/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors` and loaded by both current Quality workflows. The script fails the build on unexpected or incomplete layouts.
 
 ### Shared models
 
@@ -45,7 +53,7 @@ The prompt enhancer is optional per request. RadiantLunar can bypass it and wire
 - `workflows/qwen_image_2_1_quality.json`
 - `workflows/qwen_image_2_1_fast.json`
 - `workflows/qwen_image_2_1_turbo.json`
-- `workflows/qwen_image_2_1_edit_gguf.json` remains as the original Quality-compatible workflow for backwards compatibility.
+- `workflows/qwen_image_2_1_edit_gguf.json` remains as the original unaccelerated 25-step workflow for backwards compatibility.
 
 RadiantLunar now normalizes every uploaded image to a maximum 768px longest side while preserving aspect ratio. The worker enforces the same cap as a fallback for direct API callers.
 
@@ -89,7 +97,7 @@ RunPod endpoint requirement: **Minimum CUDA version 13.0**. Do not allow CUDA 12
 - Local `ViggleTurboSigmas` scheduler node for Fast mode
 - JamePeng prebuilt CUDA 12.6 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
 
-Rebuild and deploy the worker image before sending the updated RadiantLunar Turbo workflow: older images contain the retired Viggle checkpoint rather than `qwen_image_2.1-Turbo-Q5_K_M.gguf`. The existing RunPod input/output contract is unchanged.
+Rebuild and deploy the worker image before sending the updated RadiantLunar Quality or Turbo workflows: older images lack the prepared LoRA and contain the retired Viggle checkpoint rather than `qwen_image_2.1-Turbo-Q5_K_M.gguf`. The existing RunPod input/output contract is unchanged.
 
 ### GPU target
 
