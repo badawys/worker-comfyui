@@ -118,8 +118,11 @@ RUN uv pip install --python /comfyui/.venv/bin/python \
     huggingface_hub \
     hf_xet
 
+COPY scripts/prepare_qwen21_turbo_lora.py /prepare_qwen21_turbo_lora.py
+
 RUN mkdir -p \
     /model-output/diffusion_models \
+    /model-output/loras \
     /model-output/text_encoders \
     /model-output/vae \
     /model-output/LLM \
@@ -128,13 +131,14 @@ RUN mkdir -p \
     /tmp/qwen21-vae \
     /tmp/qwen21-pe \
     /tmp/qwen21-fast \
-    /tmp/qwen21-turbo
+    /tmp/qwen21-turbo \
+    /tmp/qwen21-turbo-lora
 
 # Download shared Qwen Image 2.1 components plus Fast/Turbo diffusion profiles in parallel.
 RUN --mount=type=cache,target=/root/.cache/huggingface \
     set -eu; \
     \
-    echo "[1/4] Qwen Image 2.1 uncensored Q5_K_M diffusion"; \
+    echo "[1/7] Qwen Image 2.1 uncensored Q5_K_M diffusion"; \
     hf download \
         abenzerps/Qwen-Image-2.1-Uncensored-GGUF \
         qwen-image-2.1-UC-Q5_K_M.gguf \
@@ -143,7 +147,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-diffusion.log 2>&1 \
         & PID_DIFFUSION=$!; \
     \
-    echo "[2/4] Qwen3-VL 8B Q4_K_M encoder + vision projector"; \
+    echo "[2/7] Qwen3-VL 8B Q4_K_M encoder + vision projector"; \
     hf download \
         gguf-org/qwen-image-2.1-gguf \
         qwen3vl-8b-it-q4_k_m.gguf \
@@ -153,7 +157,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-encoder.log 2>&1 \
         & PID_ENCODER=$!; \
     \
-    echo "[3/4] Official Qwen Image 2.1 VAE"; \
+    echo "[3/7] Official Qwen Image 2.1 VAE"; \
     hf download \
         Comfy-Org/Qwen-Image-2.1 \
         vae/qwen_image_2.1_vae_bf16.safetensors \
@@ -162,7 +166,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-vae.log 2>&1 \
         & PID_VAE=$!; \
     \
-    echo "[4/4] Qwen Image 2.1 I2I prompt enhancer Q4_K_M + projector"; \
+    echo "[4/7] Qwen Image 2.1 I2I prompt enhancer Q4_K_M + projector"; \
     hf download \
         prithivMLmods/Qwen-Image-2.1-PE-I2I-GGUF \
         Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf \
@@ -172,7 +176,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-pe.log 2>&1 \
         & PID_PE=$!; \
     \
-    echo "[5/6] Fast · Viggle v0.2.1 premerged 6-step Q5_K_M GGUF"; \
+    echo "[5/7] Fast · Viggle v0.2.1 premerged 6-step Q5_K_M GGUF"; \
     hf download \
         Abiray/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-GGUF \
         qwen_image_2.1_turbo_Q5_K_M.gguf \
@@ -181,7 +185,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-fast.log 2>&1 \
         & PID_FAST=$!; \
     \
-    echo "[6/6] Turbo · Qwen Image 2.1 Turbo 8-step Q5_K_M GGUF"; \
+    echo "[6/7] Turbo · Qwen Image 2.1 Turbo 8-step Q5_K_M GGUF"; \
     hf download \
         vantagewithai/Qwen-Image-2.1-turbo-ComfyUI-GGUF \
         qwen_image_2.1-Turbo-Q5_K_M.gguf \
@@ -190,6 +194,15 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-turbo.log 2>&1 \
         & PID_TURBO=$!; \
     \
+    echo "[7/7] Quality · official Qwen Image 2.1 Turbo LoRA"; \
+    hf download \
+        Comfy-Org/Qwen-Image-2.1 \
+        loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors \
+        --local-dir /tmp/qwen21-turbo-lora \
+        --max-workers 2 \
+        > /tmp/qwen21-turbo-lora.log 2>&1 \
+        & PID_TURBO_LORA=$!; \
+    \
     FAILED=0; \
     for ITEM in \
         "DIFFUSION:${PID_DIFFUSION}:/tmp/qwen21-diffusion.log" \
@@ -197,7 +210,8 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         "VAE:${PID_VAE}:/tmp/qwen21-vae.log" \
         "PROMPT_ENHANCER:${PID_PE}:/tmp/qwen21-pe.log" \
         "FAST:${PID_FAST}:/tmp/qwen21-fast.log" \
-        "TURBO:${PID_TURBO}:/tmp/qwen21-turbo.log"; do \
+        "TURBO:${PID_TURBO}:/tmp/qwen21-turbo.log" \
+        "TURBO_LORA:${PID_TURBO_LORA}:/tmp/qwen21-turbo-lora.log"; do \
         NAME="${ITEM%%:*}"; \
         REST="${ITEM#*:}"; \
         PID="${REST%%:*}"; \
@@ -211,6 +225,10 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         fi; \
     done; \
     test "${FAILED}" -eq 0; \
+    \
+    python /prepare_qwen21_turbo_lora.py \
+        /tmp/qwen21-turbo-lora/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors \
+        /model-output/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors; \
     \
     mv /tmp/qwen21-diffusion/qwen-image-2.1-UC-Q5_K_M.gguf \
         /model-output/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf; \
@@ -236,12 +254,14 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         /tmp/qwen21-pe \
         /tmp/qwen21-fast \
         /tmp/qwen21-turbo \
+        /tmp/qwen21-turbo-lora \
         /tmp/qwen21-diffusion.log \
         /tmp/qwen21-encoder.log \
         /tmp/qwen21-vae.log \
         /tmp/qwen21-pe.log \
         /tmp/qwen21-fast.log \
-        /tmp/qwen21-turbo.log
+        /tmp/qwen21-turbo.log \
+        /tmp/qwen21-turbo-lora.log
 
 
 # =============================================================================
@@ -252,6 +272,7 @@ FROM comfy-base AS final
 
 RUN mkdir -p \
     /comfyui/models/diffusion_models \
+    /comfyui/models/loras \
     /comfyui/models/text_encoders \
     /comfyui/models/vae \
     /comfyui/models/LLM
@@ -267,6 +288,10 @@ COPY --from=model-downloader \
 COPY --from=model-downloader \
     /model-output/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf \
     /comfyui/models/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf
+
+COPY --from=model-downloader \
+    /model-output/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors \
+    /comfyui/models/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors
 
 COPY --from=model-downloader \
     /model-output/text_encoders/qwen3vl-8b-it-q4_k_m.gguf \
@@ -320,7 +345,7 @@ RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
 RUN echo "============================================================" \
     && echo "worker-comfyui Qwen Image 2.1 GGUF image ready" \
-    && echo "Quality: uncensored Q5_K_M GGUF · 25 steps" \
+    && echo "Quality: uncensored Q5_K_M GGUF + Turbo LoRA · 8 steps" \
     && echo "Fast: Viggle v0.2.1 Q5_K_M GGUF · 6 steps" \
     && echo "Turbo: Qwen Image 2.1 Turbo Q5_K_M GGUF · 8 steps" \
     && echo "Encoder: Qwen3-VL 8B Q4_K_M GGUF" \
