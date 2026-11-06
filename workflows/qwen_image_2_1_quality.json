@@ -21,19 +21,6 @@
       "title": "PE Preview · 1024px max"
     }
   },
-  "12": {
-    "inputs": {
-      "image": [
-        "10",
-        0
-      ],
-      "multiple": 32
-    },
-    "class_type": "QwenPadToMultiple",
-    "_meta": {
-      "title": "Pad Source To 32px (no stretch)"
-    }
-  },
   "20": {
     "inputs": {
       "T2I GGUF": "Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf",
@@ -128,7 +115,7 @@
         0
       ],
       "image_1": [
-        "12",
+        "10",
         0
       ]
     },
@@ -293,9 +280,9 @@
         0
       ]
     },
-    "class_type": "QwenCropToReference",
+    "class_type": "QwenResizeToReference",
     "_meta": {
-      "title": "Crop Output To Source Size"
+      "title": "Resize Output To Source Size"
     }
   },
   "70": {

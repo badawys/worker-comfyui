@@ -41,6 +41,11 @@ COMFY_SKIP_BASE64 = os.environ.get("COMFY_SKIP_BASE64", "false").lower() == "tru
 WORKER_VERBOSE = os.environ.get("WORKER_VERBOSE", "false").lower() == "true"
 COMFY_INPUT_MAX_DIMENSION = int(os.environ.get("COMFY_INPUT_MAX_DIMENSION", "768"))
 COMFY_INPUT_JPEG_QUALITY = int(os.environ.get("COMFY_INPUT_JPEG_QUALITY", "92"))
+# When the input cap shrinks the upload, scale output images back up to the
+# original upload size so callers get the same dimensions they sent.
+COMFY_RESTORE_OUTPUT_SIZE = (
+    os.environ.get("COMFY_RESTORE_OUTPUT_SIZE", "true").lower() == "true"
+)
 
 # ComfyUI binary websocket event type for an encoded preview image.
 # SaveImageWebsocket uses this exact event path and sends an 8-byte header:
@@ -219,6 +224,51 @@ def _resize_input_image(blob, name):
             f"{resized.width}x{resized.height}"
         )
         return output.getvalue()
+
+
+def _original_image_size(images):
+    """Upright (EXIF-corrected) size of the first request image, or None."""
+    if not images:
+        return None
+    try:
+        blob = _decode_image_data_uri(images[0]["image"])
+        with Image.open(BytesIO(blob)) as source:
+            width, height = source.size
+            if source.getexif().get(0x0112) in (5, 6, 7, 8):
+                width, height = height, width
+            return width, height
+    except Exception as exc:
+        _debug(f"Could not read original input size: {exc}")
+        return None
+
+
+def _restore_output_size(data, size):
+    """Resize an output image to `size` when only the input cap changed it."""
+    if not size:
+        return data
+    try:
+        with Image.open(BytesIO(data)) as output:
+            if output.size == tuple(size):
+                return data
+            out_w, out_h = output.size
+            # Same picture at a different scale only; leave anything else alone.
+            if abs(out_w / out_h - size[0] / size[1]) > 0.02:
+                return data
+            image_format = output.format or "PNG"
+            resized = output.convert("RGB" if image_format == "JPEG" else output.mode)
+            resized = resized.resize(tuple(size), Image.Resampling.LANCZOS)
+            buffer = BytesIO()
+            if image_format == "JPEG":
+                resized.save(buffer, format="JPEG", quality=95)
+            elif image_format == "WEBP":
+                resized.save(buffer, format="WEBP", quality=95)
+            else:
+                resized.save(buffer, format="PNG")
+            _debug(f"Restored output size {out_w}x{out_h} -> {size[0]}x{size[1]}")
+            return buffer.getvalue()
+    except Exception as exc:
+        _debug(f"Could not restore output size: {exc}")
+        return data
 
 
 def write_input_images(images):
@@ -460,7 +510,10 @@ def upload_bytes_to_s3(job_id, filename, data):
     )
 
 
-def _append_output_from_bytes(output_data, job_id, filename, data, subfolder=""):
+def _append_output_from_bytes(
+    output_data, job_id, filename, data, subfolder="", restore_size=None
+):
+    data = _restore_output_size(data, restore_size)
     if _bucket_configured():
         url = upload_bytes_to_s3(job_id, filename, data)
         output_data.append(
@@ -493,7 +546,7 @@ def _append_output_from_bytes(output_data, job_id, filename, data, subfolder="")
     )
 
 
-def _collect_history_outputs(prompt_id, job_id, output_data, errors):
+def _collect_history_outputs(prompt_id, job_id, output_data, errors, restore_size=None):
     """Legacy fallback for workflows not using SaveImageWebsocket."""
     history = get_history(prompt_id)
     prompt_history = history.get(prompt_id)
@@ -515,7 +568,12 @@ def _collect_history_outputs(prompt_id, job_id, output_data, errors):
                 try:
                     data = get_output_bytes(filename, subfolder, output_type)
                     _append_output_from_bytes(
-                        output_data, job_id, filename, data, subfolder=subfolder
+                        output_data,
+                        job_id,
+                        filename,
+                        data,
+                        subfolder=subfolder,
+                        restore_size=restore_size,
                     )
                 except Exception as exc:
                     errors.append(
@@ -535,6 +593,9 @@ def handler(job):
         return {"error": f"ComfyUI server ({COMFY_HOST}) is not reachable"}
 
     input_images = validated_data.get("images")
+    restore_size = (
+        _original_image_size(input_images) if COMFY_RESTORE_OUTPUT_SIZE else None
+    )
     if input_images:
         if COMFY_DIRECT_INPUT_WRITE:
             input_result = write_input_images(input_images)
@@ -637,10 +698,14 @@ def handler(job):
                 websocket_images, start=1
             ):
                 filename = f"{output_prefix}_{index:05d}{extension}"
-                _append_output_from_bytes(output_data, job_id, filename, data)
+                _append_output_from_bytes(
+                    output_data, job_id, filename, data, restore_size=restore_size
+                )
         elif prompt_id:
             # Compatibility path for workflows that did not emit websocket images.
-            _collect_history_outputs(prompt_id, job_id, output_data, errors)
+            _collect_history_outputs(
+                prompt_id, job_id, output_data, errors, restore_size=restore_size
+            )
 
     except websocket.WebSocketException as exc:
         print(traceback.format_exc())

@@ -30,9 +30,11 @@ The Fast (Viggle) and Turbo profiles and their models have been removed.
 
 **Model source:** the original `abenzerps/Qwen-Image-2.1-Uncensored-GGUF` repo was renamed and its files replaced on 2026-11-03. The build now downloads `qwen-image-2.1-UC-Q5_K_M.gguf` from a mirror pinned to a commit, falls back to a second mirror, and checks the file's SHA-256 (`QWEN21_UC_Q5_SHA256` build arg).
 
-### Exact output size
+### Exact output size and position
 
-`QwenImage21TextEncodeList` rounds the reference image to multiples of 32 and stretches it, which made outputs a few pixels off in size and slightly shifted. The workflow now pads the source to a multiple of 32 (`QwenPadToMultiple`, edge pixels repeated) and crops the decoded image back to the source size (`QwenCropToReference`). Both nodes live in `src/custom_nodes/qwen_exact_size.py`.
+`QwenImage21TextEncodeList` rounds the reference image to multiples of 32 and stretches it slightly; the output keeps that rounded size. The model maps the whole reference canvas onto the whole output canvas, so `QwenResizeToReference` (`src/custom_nodes/qwen_exact_size.py`) resizes the decoded image back to the source size, and every pixel lands back where it was (measured < 1px drift). Padding the source instead does not work: the model squeezes the picture into the padded canvas, giving a vertical shift that grows down the image.
+
+When `COMFY_INPUT_MAX_DIMENSION` shrinks an upload, the handler scales the output back up to the original upload size (`COMFY_RESTORE_OUTPUT_SIZE=true` by default), so callers always get the dimensions they sent.
 
 ### Quality LoRA compatibility
 
@@ -82,10 +84,10 @@ A CUDA 13 driver runs both the CUDA 13 PyTorch runtime and the CUDA 12.8 llama.c
 - ComfyUI 0.37.0
 - `leejet/ComfyUI-GGUF`
 - `xiaowuapple-pixel/ComfyUI-Prompt-Enhancer`
-- Local nodes: `PEPreviewResize`, `QwenPadToMultiple`, `QwenCropToReference`
+- Local nodes: `PEPreviewResize`, `QwenResizeToReference`
 - JamePeng prebuilt CUDA 12.8 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
 
-Rebuild and deploy the worker image before sending the updated RadiantLunar workflow: older images lack the pad/crop nodes. The RunPod input/output contract is unchanged.
+Rebuild and deploy the worker image before sending the updated RadiantLunar workflow: older images lack the `QwenResizeToReference` node. The RunPod input/output contract is unchanged.
 
 ### GPU target
 
