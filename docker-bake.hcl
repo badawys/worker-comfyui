@@ -19,7 +19,7 @@ variable "BASE_IMAGE" {
 }
 
 variable "CUDA_VERSION_FOR_COMFY" {
-  default = "12.8"
+  default = "13.0"
 }
 
 

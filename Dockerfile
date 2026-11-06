@@ -13,7 +13,7 @@ ARG BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 FROM ${BASE_IMAGE} AS comfy-base
 
 ARG COMFYUI_VERSION=0.37.0
-ARG CUDA_VERSION_FOR_COMFY=12.8
+ARG CUDA_VERSION_FOR_COMFY=13.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_PREFER_BINARY=1
@@ -54,11 +54,10 @@ RUN uv pip install \
     wheel
 
 # ComfyUI 0.37.0 contains the native Qwen Image 2.1 nodes.
-# Everything in this image targets CUDA 12.8 (base image, PyTorch cu128 and the
-# llama.cpp cu128 wheel), so it runs on any host driver that supports CUDA 12.8+
-# (driver 570+), including Blackwell GPUs such as RTX PRO 6000 and its MIG slices.
-# Hosts that are all CUDA 13 can build with CUDA_VERSION_FOR_COMFY=13.0 for
-# ComfyUI's cu130-only optimized kernels; that build then needs driver 580+.
+# PyTorch comes from the CUDA 13.0 index so ComfyUI can use its optimized
+# comfy_kitchen kernels. The base image and llama.cpp wheel stay CUDA 12.8 (the
+# cu128 wheel has sm_120 Blackwell kernels); a CUDA 13 driver runs both.
+# Host requirement: CUDA 13.0+ (driver 580+), e.g. RTX PRO 6000 and its MIG slices.
 RUN /usr/bin/yes | comfy \
         --workspace /comfyui \
         install \
@@ -312,7 +311,7 @@ RUN apt-get update \
 ENV CC=/usr/bin/gcc
 ENV CXX=/usr/bin/g++
 
-RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda); assert torch.version.cuda and tuple(map(int, torch.version.cuda.split('.')[:2])) >= (12, 8), 'PyTorch cu128+ is required (Blackwell / sm_120)'" \
+RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda); assert torch.version.cuda and int(torch.version.cuda.split('.')[0]) >= 13, 'PyTorch cu130+ is required for optimized ComfyUI CUDA kernels'" \
     && python -c "import runpod; print('RunPod SDK OK')" \
     && python -c "import gguf; print('ComfyUI-GGUF dependency OK')" \
     && python -c "import llama_cpp; print('llama-cpp-python:', llama_cpp.__version__)"

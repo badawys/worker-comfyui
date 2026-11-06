@@ -67,17 +67,13 @@ The handler already uses direct writes to `/comfyui/input`, websocket image outp
 
 Worker input normalization defaults to `COMFY_INPUT_MAX_DIMENSION=768` and `COMFY_INPUT_JPEG_QUALITY=92`. Set `COMFY_INPUT_MAX_DIMENSION=0` to disable the worker-side fallback.
 
-### CUDA 12.8+ runtime
+### CUDA 13 runtime
 
-Everything in the image targets CUDA 12.8:
-
+- PyTorch cu130 (`comfy-cli --cuda-version 13.0`), so ComfyUI can use its optimized `comfy_kitchen` kernels
 - Base image `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`
-- PyTorch cu128 (`comfy-cli --cuda-version 12.8`)
 - JamePeng `llama-cpp-python 0.3.49+cu128` wheel, built with `sm_120` (Blackwell) kernels
 
-It runs on any host driver that supports CUDA 12.8 or newer (driver 570+), including Blackwell GPUs such as RTX PRO 6000 and its MIG slices. RunPod endpoint setting: allow CUDA **12.8, 12.9 and 13.0**.
-
-If every host you use supports CUDA 13 (driver 580+), you can build with `CUDA_VERSION_FOR_COMFY=13.0` to get ComfyUI's cu130-only optimized `comfy_kitchen` kernels. That build no longer runs on CUDA 12.x hosts.
+A CUDA 13 driver runs both the CUDA 13 PyTorch runtime and the CUDA 12.8 llama.cpp libraries. RunPod endpoint requirement: **minimum CUDA version 13.0** (driver 580+). Supports Blackwell GPUs such as RTX PRO 6000 and its MIG slices.
 
 `CUDA_MODULE_LOADING=LAZY` is enabled to reduce serverless startup work, and the default ComfyUI log level is `INFO`.
 
