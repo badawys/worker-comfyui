@@ -15,11 +15,11 @@ variable "COMFYUI_VERSION" {
 }
 
 variable "BASE_IMAGE" {
-  default = "nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04"
+  default = "nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04"
 }
 
 variable "CUDA_VERSION_FOR_COMFY" {
-  default = "13.0"
+  default = "12.8"
 }
 
 

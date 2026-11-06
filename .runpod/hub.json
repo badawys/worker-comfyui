@@ -1,6 +1,6 @@
 {
   "title": "Qwen Image 2.1 GGUF - ComfyUI",
-  "description": "Qwen Image 2.1 editing with Quality (25-step), Fast (Viggle 6-step), Turbo (Viggle 4-step), GGUF encoder, and optional local I2I prompt enhancement",
+  "description": "Qwen Image 2.1 editing (Quality, 8 steps: uncensored Q5_K_M GGUF + Turbo LoRA), GGUF encoder, and optional local I2I prompt enhancement. CUDA 12.8+ (Blackwell ready).",
   "type": "serverless",
   "category": "image",
   "iconUrl": "https://cpjrphpz3t5wbwfe.public.blob.vercel-storage.com/comfy-ui.png",
@@ -10,6 +10,8 @@
     "gpuIds": "ADA_24",
     "gpuCount": 1,
     "allowedCudaVersions": [
+      "12.8",
+      "12.9",
       "13.0"
     ],
     "env": [

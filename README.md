@@ -16,25 +16,27 @@ This project allows you to run ComfyUI workflows as a serverless API endpoint on
 
 ## Qwen Image 2.1 GGUF Worker
 
-The `qwen-image-2.1-gguf` branch provides three Qwen Image 2.1 image-editing profiles for RunPod Serverless while sharing the same Qwen3-VL encoder, VAE and optional local I2I prompt enhancer.
+The `qwen-image-2.1-gguf` branch provides one Qwen Image 2.1 image-editing profile, **Quality (8 steps)**, for RunPod Serverless, with an optional local I2I prompt enhancer.
 
-### Profiles
+### Quality profile
 
-| Profile | Diffusion | Sampling | Purpose |
-| --- | --- | --- | --- |
-| **Quality** | `qwen-image-2.1-UC-Q5_K_M.gguf` + official Turbo LoRA | Official 8-step sigma schedule · Euler · CFG 1 · LoRA strength 1 | Existing Quality checkpoint with accelerated sampling |
-| **Fast** | `qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf` | Viggle v0.2.1 · exact 6-step sigma schedule · CFG-free | Default balance of quality and latency |
-| **Turbo** | `qwen_image_2.1-Turbo-Q5_K_M.gguf` | Official 8-step sigma schedule · Euler · CFG 1 | Qwen Image 2.1 Turbo |
+| Diffusion | Sampling |
+| --- | --- |
+| `qwen-image-2.1-UC-Q5_K_M.gguf` + official Turbo LoRA (strength 1) | Official 8-step sigma schedule · Euler · CFG 1 |
 
-Fast and Turbo are distilled GGUF checkpoints, so no runtime LoRA merge is required. Fast uses the Viggle v0.2.1 6-step student. Turbo uses the Q5_K_M quantization from [VantageWithAI](https://huggingface.co/vantagewithai/Qwen-Image-2.1-turbo-ComfyUI-GGUF) of Qwen’s official Turbo checkpoint. Its `ManualSigmas` node supplies the [checkpoint’s saved schedule](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/model_index.json) directly: `1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`. Do not replace it with an 8-step `simple` scheduler or the resolution-shifted Viggle schedule.
+Quality applies the [official extracted Turbo LoRA](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors) through `LoraLoaderModelOnly`, between `UnetLoaderGGUF` and `QwenImage21Cache`, then samples with `CFGGuider` (CFG 1), `KSamplerSelect` (Euler), `ManualSigmas` and `SamplerCustomAdvanced`. The sigma schedule comes from the [official image-edit template](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_qwen_image_2_1_turbo_image_edit.json): `1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`.
 
-Quality applies the [official extracted Turbo LoRA](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors) at `strength_model=1.0` through `LoraLoaderModelOnly`, between `UnetLoaderGGUF` and `QwenImage21Cache`. It uses the same `CFGGuider` (CFG 1), `RandomNoise`, `KSamplerSelect` (Euler), `ManualSigmas`, and `SamplerCustomAdvanced` path as Turbo. The source-image latent and lossless GPU prefix cache remain connected. The LoRA is applied only to Quality; do not stack it onto the already distilled Fast or Turbo models.
+The Fast (Viggle) and Turbo profiles and their models have been removed.
 
-The [Comfy-Org model card](https://huggingface.co/Comfy-Org/Qwen-Image-2.1#turbo) specifies 8 steps and CFG 1 for either route. The [official image-edit template](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_qwen_image_2_1_turbo_image_edit.json) supplies the exact manual sigma schedule. At CFG 1 negative conditioning is skipped; increasing CFG or changing schedules is not part of this baseline. This reduces Quality denoising from 25 to 8 evaluations, but total latency and fidelity on the modified Quality checkpoint still need a GPU comparison.
+**Model source:** the original `abenzerps/Qwen-Image-2.1-Uncensored-GGUF` repo was renamed and its files replaced on 2026-11-03. The build now downloads `qwen-image-2.1-UC-Q5_K_M.gguf` from a mirror pinned to a commit, falls back to a second mirror, and checks the file's SHA-256 (`QWEN21_UC_Q5_SHA256` build arg).
+
+### Exact output size
+
+`QwenImage21TextEncodeList` rounds the reference image to multiples of 32 and stretches it, which made outputs a few pixels off in size and slightly shifted. The workflow now pads the source to a multiple of 32 (`QwenPadToMultiple`, edge pixels repeated) and crops the decoded image back to the source size (`QwenCropToReference`). Both nodes live in `src/custom_nodes/qwen_exact_size.py`.
 
 ### Quality LoRA compatibility
 
-The Quality GGUF stores separate `img_mlp.gate_layer` and `img_mlp.proj` tensors. The official LoRA stores fused `img_mlp.gate_up` adapters, which can be silently skipped by the current ComfyUI mapping ([upstream issue #16944](https://github.com/Comfy-Org/ComfyUI/issues/16944)). The model-downloader stage runs `scripts/prepare_qwen21_turbo_lora.py` once to split all 32 MLP adapters: split `lora_up` row-wise and duplicate `lora_down` and `alpha`. This preserves the adapter matrix products, BF16 precision, rank and scale without numerical conversion or retraining. The prepared file is stored in `models/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors` and loaded by both current Quality workflows. The script fails the build on unexpected or incomplete layouts.
+The Quality GGUF stores separate `img_mlp.gate_layer` and `img_mlp.proj` tensors. The official LoRA stores fused `img_mlp.gate_up` adapters, which can be silently skipped by the current ComfyUI mapping ([upstream issue #16944](https://github.com/Comfy-Org/ComfyUI/issues/16944)). The model-downloader stage runs `scripts/prepare_qwen21_turbo_lora.py` once to split all 32 MLP adapters: split `lora_up` row-wise and duplicate `lora_down` and `alpha`. This preserves the adapter matrix products, BF16 precision, rank and scale. The prepared file is stored as `models/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors`. The script fails the build on unexpected or incomplete layouts.
 
 ### Shared models
 
@@ -46,32 +48,18 @@ The Quality GGUF stores separate `img_mlp.gate_layer` and `img_mlp.proj` tensors
 | Prompt-enhancer vision projector | `Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf` |
 | VAE | `qwen_image_2.1_vae_bf16.safetensors` |
 
-The prompt enhancer is optional per request. RadiantLunar can bypass it and wire the raw prompt directly to the Qwen Image 2.1 text encoder.
+The prompt enhancer is optional per request and off by default in RadiantLunar, which then wires the raw prompt directly to the text encoder.
 
 ### Workflows
 
 - `workflows/qwen_image_2_1_quality.json`
-- `workflows/qwen_image_2_1_fast.json`
-- `workflows/qwen_image_2_1_turbo.json`
 - `workflows/qwen_image_2_1_edit_gguf.json` remains as the original unaccelerated 25-step workflow for backwards compatibility.
 
-RadiantLunar now normalizes every uploaded image to a maximum 768px longest side while preserving aspect ratio. The worker enforces the same cap as a fallback for direct API callers.
+RadiantLunar normalizes every uploaded image to a maximum 768px longest side while preserving aspect ratio. The worker enforces the same cap as a fallback for direct API callers.
 
-### Latency optimizations
+### Prompt enhancer settings
 
-The profiles also tune the shared prompt-enhancer/runtime path:
-
-| Profile | PE mode | PE context | PE vision preview | Qwen cache |
-| --- | --- | --- | --- | --- |
-| **Quality** | Thinking, 400 plan tokens; 1536-token answer cap | 12288 | max 1024 px | GPU, lossless |
-| **Fast** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
-| **Turbo** | Direct (no thinking); 1024-token answer cap | 12288 | max 768 px | GPU, lossless |
-
-The PE preview remains a separate tensor used only by the prompt enhancer. Qwen Image 2.1 conditioning receives the normalized upload image; RadiantLunar caps that image to a 768px longest side while preserving aspect ratio.
-
-### PE context safety
-
-The GGUF PE uses a 12288-token context (the plugin's native default) plus an explicit completion cap via `QwenImage21PESettings`: 1536 tokens for Quality and 1024 for Fast/Turbo. This prevents llama.cpp from allowing a runaway Direct completion to consume the remaining context and fail with `decode: failed to find a memory slot for batch of size 1`.
+Thinking mode with 400 plan tokens, a 1536-token answer cap, 12288-token context, and a 1024px vision preview. The preview is a separate tensor used only by the prompt enhancer. The explicit answer cap stops a runaway completion from filling the context and failing with `decode: failed to find a memory slot for batch of size 1`.
 
 ComfyUI starts with `--fast fp16_accumulation` by default. Set `COMFY_PERFORMANCE_ARGS=""` to disable it without rebuilding the image, or override the variable with another supported ComfyUI performance flag set.
 
@@ -79,29 +67,33 @@ The handler already uses direct writes to `/comfyui/input`, websocket image outp
 
 Worker input normalization defaults to `COMFY_INPUT_MAX_DIMENSION=768` and `COMFY_INPUT_JPEG_QUALITY=92`. Set `COMFY_INPUT_MAX_DIMENSION=0` to disable the worker-side fallback.
 
-### CUDA 13 optimized runtime
+### CUDA 12.8+ runtime
 
-This branch now installs the **PyTorch cu130** stack through `comfy-cli --cuda-version 13.0` so ComfyUI can enable its optimized `comfy_kitchen` CUDA backend instead of falling back to eager kernels.
+Everything in the image targets CUDA 12.8:
 
-The container base intentionally remains `nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04` because the Prompt Enhancer uses the known-working JamePeng `llama-cpp-python 0.3.49+cu126` wheel. On a CUDA 13-capable NVIDIA host driver, CUDA 12.6 llama.cpp and PyTorch cu130 can coexist: PyTorch brings its CUDA 13 user-space runtime while llama.cpp uses the CUDA 12.6 libraries from the base image.
+- Base image `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`
+- PyTorch cu128 (`comfy-cli --cuda-version 12.8`)
+- JamePeng `llama-cpp-python 0.3.49+cu128` wheel, built with `sm_120` (Blackwell) kernels
 
-RunPod endpoint requirement: **Minimum CUDA version 13.0**. Do not allow CUDA 12.x hosts for this branch.
+It runs on any host driver that supports CUDA 12.8 or newer (driver 570+), including Blackwell GPUs such as RTX PRO 6000 and its MIG slices. RunPod endpoint setting: allow CUDA **12.8, 12.9 and 13.0**.
 
-`CUDA_MODULE_LOADING=LAZY` is enabled to reduce serverless startup work, and the default ComfyUI log level is now `INFO` instead of `DEBUG`.
+If every host you use supports CUDA 13 (driver 580+), you can build with `CUDA_VERSION_FOR_COMFY=13.0` to get ComfyUI's cu130-only optimized `comfy_kitchen` kernels. That build no longer runs on CUDA 12.x hosts.
+
+`CUDA_MODULE_LOADING=LAZY` is enabled to reduce serverless startup work, and the default ComfyUI log level is `INFO`.
 
 ### Runtime
 
 - ComfyUI 0.37.0
 - `leejet/ComfyUI-GGUF`
 - `xiaowuapple-pixel/ComfyUI-Prompt-Enhancer`
-- Local `ViggleTurboSigmas` scheduler node for Fast mode
-- JamePeng prebuilt CUDA 12.6 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
+- Local nodes: `PEPreviewResize`, `QwenPadToMultiple`, `QwenCropToReference`
+- JamePeng prebuilt CUDA 12.8 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
 
-Rebuild and deploy the worker image before sending the updated RadiantLunar Quality or Turbo workflows: older images lack the prepared LoRA and contain the retired Viggle checkpoint rather than `qwen_image_2.1-Turbo-Q5_K_M.gguf`. The existing RunPod input/output contract is unchanged.
+Rebuild and deploy the worker image before sending the updated RadiantLunar workflow: older images lack the pad/crop nodes. The RunPod input/output contract is unchanged.
 
 ### GPU target
 
-Primarily NVIDIA Ampere/Ada GPUs, especially RTX 4090 24 GB. Blackwell SM120 is intentionally not targeted by this CUDA 12.6 branch.
+NVIDIA Ampere, Ada and Blackwell GPUs with 24 GB or more, e.g. RTX 4090 and RTX PRO 6000 (including 24 GB MIG slices).
 
 ## Table of Contents
 

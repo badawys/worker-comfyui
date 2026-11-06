@@ -4,7 +4,8 @@
 # Qwen Image 2.1 GGUF RunPod worker
 # =============================================================================
 
-ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+# CUDA 12.8 is the minimum for Blackwell (sm_120), e.g. RTX PRO 6000 / MIG slices.
+ARG BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 # =============================================================================
 # ComfyUI base
 # =============================================================================
@@ -12,7 +13,7 @@ ARG BASE_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 FROM ${BASE_IMAGE} AS comfy-base
 
 ARG COMFYUI_VERSION=0.37.0
-ARG CUDA_VERSION_FOR_COMFY=13.0
+ARG CUDA_VERSION_FOR_COMFY=12.8
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_PREFER_BINARY=1
@@ -53,10 +54,11 @@ RUN uv pip install \
     wheel
 
 # ComfyUI 0.37.0 contains the native Qwen Image 2.1 nodes.
-# Install its PyTorch stack from the CUDA 13.0 index so comfy_kitchen can use
-# optimized CUDA kernels. The base image intentionally stays CUDA 12.6 because
-# the known-working Prompt Enhancer llama.cpp wheel is cu126; a CUDA 13 host
-# driver can execute both CUDA 12.6 and CUDA 13 user-space runtimes.
+# Everything in this image targets CUDA 12.8 (base image, PyTorch cu128 and the
+# llama.cpp cu128 wheel), so it runs on any host driver that supports CUDA 12.8+
+# (driver 570+), including Blackwell GPUs such as RTX PRO 6000 and its MIG slices.
+# Hosts that are all CUDA 13 can build with CUDA_VERSION_FOR_COMFY=13.0 for
+# ComfyUI's cu130-only optimized kernels; that build then needs driver 580+.
 RUN /usr/bin/yes | comfy \
         --workspace /comfyui \
         install \
@@ -87,15 +89,11 @@ RUN if [ -f ComfyUI-GGUF/requirements.txt ]; then \
             --no-cache-dir -r ComfyUI-Prompt-Enhancer/requirements.txt; \
     fi
 
-# Small local scheduler node used by the premerged Viggle v0.2.1 Fast checkpoint.
-COPY src/custom_nodes/viggle_turbo_sigmas.py /comfyui/custom_nodes/viggle_turbo_sigmas.py
-COPY src/custom_nodes/pe_preview_resize.py /comfyui/custom_nodes/pe_preview_resize.py
-COPY src/custom_nodes/qwen_exact_size.py /comfyui/custom_nodes/qwen_exact_size.py
-
-# Use JamePeng's prebuilt CUDA 12.6 / Python 3.12 Linux wheel.
+# Use JamePeng's prebuilt CUDA 12.8 / Python 3.12 Linux wheel. Same 0.3.49
+# release as before; the cu128 build includes sm_120 (Blackwell) kernels.
 # This avoids compiling llama.cpp during the RunPod image build (the previous
 # source build could consume a large part of RunPod's 30-minute build limit).
-ARG LLAMA_CPP_WHEEL_URL=https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu126-linux-20260831/llama_cpp_python-0.3.49%2Bcu126-cp312-cp312-linux_x86_64.whl
+ARG LLAMA_CPP_WHEEL_URL=https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.49-cu128-linux-20260831/llama_cpp_python-0.3.49%2Bcu128-cp312-cp312-linux_x86_64.whl
 
 RUN uv pip install --python /comfyui/.venv/bin/python \
         "${LLAMA_CPP_WHEEL_URL}" \
@@ -138,24 +136,37 @@ RUN mkdir -p \
     /tmp/qwen21-encoder \
     /tmp/qwen21-vae \
     /tmp/qwen21-pe \
-    /tmp/qwen21-fast \
-    /tmp/qwen21-turbo \
     /tmp/qwen21-turbo-lora
 
-# Download shared Qwen Image 2.1 components plus Fast/Turbo diffusion profiles in parallel.
+# The original abenzerps/Qwen-Image-2.1-Uncensored-GGUF repo was renamed and its
+# files replaced (2026-11-03), so the uncensored Q5_K_M file now comes from
+# mirrors pinned to a commit. Every mirror checked has the same SHA-256.
+ARG QWEN21_UC_Q5_SHA256=af0bf278cf16d204fb31c384dc82fd41dca82d976b15fe9305a60c726fd6f821
+
+# Download the Quality profile's Qwen Image 2.1 components in parallel.
 RUN --mount=type=cache,target=/root/.cache/huggingface \
     set -eu; \
     \
-    echo "[1/7] Qwen Image 2.1 uncensored Q5_K_M diffusion"; \
-    hf download \
-        abenzerps/Qwen-Image-2.1-Uncensored-GGUF \
-        qwen-image-2.1-UC-Q5_K_M.gguf \
-        --local-dir /tmp/qwen21-diffusion \
-        --max-workers 2 \
-        > /tmp/qwen21-diffusion.log 2>&1 \
+    echo "[1/5] Qwen Image 2.1 uncensored Q5_K_M diffusion"; \
+    ( \
+        for SRC in \
+            "KasugaiSakura/Qwen-Image-2.1-Uncensored-Abenzerps-GGUF@240ef1d68f778115f8ff69965eca9ad6d3ccdcf1" \
+            "basileleuwa/Qwen-Image-2.1-Uncensored-GGUF@dcbc8aaae12500aab2a00052ad6b5bbff1dea2d6"; do \
+            echo "Trying ${SRC}"; \
+            if hf download "${SRC%@*}" qwen-image-2.1-UC-Q5_K_M.gguf \
+                    --revision "${SRC#*@}" \
+                    --local-dir /tmp/qwen21-diffusion \
+                    --max-workers 2 \
+                && echo "${QWEN21_UC_Q5_SHA256}  /tmp/qwen21-diffusion/qwen-image-2.1-UC-Q5_K_M.gguf" | sha256sum -c -; then \
+                exit 0; \
+            fi; \
+            rm -f /tmp/qwen21-diffusion/qwen-image-2.1-UC-Q5_K_M.gguf; \
+        done; \
+        exit 1 \
+    ) > /tmp/qwen21-diffusion.log 2>&1 \
         & PID_DIFFUSION=$!; \
     \
-    echo "[2/7] Qwen3-VL 8B Q4_K_M encoder + vision projector"; \
+    echo "[2/5] Qwen3-VL 8B Q4_K_M encoder + vision projector"; \
     hf download \
         gguf-org/qwen-image-2.1-gguf \
         qwen3vl-8b-it-q4_k_m.gguf \
@@ -165,7 +176,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-encoder.log 2>&1 \
         & PID_ENCODER=$!; \
     \
-    echo "[3/7] Official Qwen Image 2.1 VAE"; \
+    echo "[3/5] Official Qwen Image 2.1 VAE"; \
     hf download \
         Comfy-Org/Qwen-Image-2.1 \
         vae/qwen_image_2.1_vae_bf16.safetensors \
@@ -174,7 +185,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-vae.log 2>&1 \
         & PID_VAE=$!; \
     \
-    echo "[4/7] Qwen Image 2.1 I2I prompt enhancer Q4_K_M + projector"; \
+    echo "[4/5] Qwen Image 2.1 I2I prompt enhancer Q4_K_M + projector"; \
     hf download \
         prithivMLmods/Qwen-Image-2.1-PE-I2I-GGUF \
         Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf \
@@ -184,25 +195,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-pe.log 2>&1 \
         & PID_PE=$!; \
     \
-    echo "[5/7] Fast · Viggle v0.2.1 premerged 6-step Q5_K_M GGUF"; \
-    hf download \
-        Abiray/Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-GGUF \
-        qwen_image_2.1_turbo_Q5_K_M.gguf \
-        --local-dir /tmp/qwen21-fast \
-        --max-workers 2 \
-        > /tmp/qwen21-fast.log 2>&1 \
-        & PID_FAST=$!; \
-    \
-    echo "[6/7] Turbo · Qwen Image 2.1 Turbo 8-step Q5_K_M GGUF"; \
-    hf download \
-        vantagewithai/Qwen-Image-2.1-turbo-ComfyUI-GGUF \
-        qwen_image_2.1-Turbo-Q5_K_M.gguf \
-        --local-dir /tmp/qwen21-turbo \
-        --max-workers 2 \
-        > /tmp/qwen21-turbo.log 2>&1 \
-        & PID_TURBO=$!; \
-    \
-    echo "[7/7] Quality · official Qwen Image 2.1 Turbo LoRA"; \
+    echo "[5/5] Quality · official Qwen Image 2.1 Turbo LoRA"; \
     hf download \
         Comfy-Org/Qwen-Image-2.1 \
         loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors \
@@ -217,8 +210,6 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         "ENCODER:${PID_ENCODER}:/tmp/qwen21-encoder.log" \
         "VAE:${PID_VAE}:/tmp/qwen21-vae.log" \
         "PROMPT_ENHANCER:${PID_PE}:/tmp/qwen21-pe.log" \
-        "FAST:${PID_FAST}:/tmp/qwen21-fast.log" \
-        "TURBO:${PID_TURBO}:/tmp/qwen21-turbo.log" \
         "TURBO_LORA:${PID_TURBO_LORA}:/tmp/qwen21-turbo-lora.log"; do \
         NAME="${ITEM%%:*}"; \
         REST="${ITEM#*:}"; \
@@ -250,25 +241,17 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         /model-output/LLM/Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf; \
     mv /tmp/qwen21-pe/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf \
         /model-output/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf; \
-    mv /tmp/qwen21-fast/qwen_image_2.1_turbo_Q5_K_M.gguf \
-        /model-output/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf; \
-    mv /tmp/qwen21-turbo/qwen_image_2.1-Turbo-Q5_K_M.gguf \
-        /model-output/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf; \
     \
     rm -rf \
         /tmp/qwen21-diffusion \
         /tmp/qwen21-encoder \
         /tmp/qwen21-vae \
         /tmp/qwen21-pe \
-        /tmp/qwen21-fast \
-        /tmp/qwen21-turbo \
         /tmp/qwen21-turbo-lora \
         /tmp/qwen21-diffusion.log \
         /tmp/qwen21-encoder.log \
         /tmp/qwen21-vae.log \
         /tmp/qwen21-pe.log \
-        /tmp/qwen21-fast.log \
-        /tmp/qwen21-turbo.log \
         /tmp/qwen21-turbo-lora.log
 
 
@@ -277,6 +260,11 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
 # =============================================================================
 
 FROM comfy-base AS final
+
+# Small local nodes. Copied here (not in comfy-base) so editing them does not
+# force the model-downloader stage to download every model again.
+COPY src/custom_nodes/pe_preview_resize.py /comfyui/custom_nodes/pe_preview_resize.py
+COPY src/custom_nodes/qwen_exact_size.py /comfyui/custom_nodes/qwen_exact_size.py
 
 RUN mkdir -p \
     /comfyui/models/diffusion_models \
@@ -288,14 +276,6 @@ RUN mkdir -p \
 COPY --from=model-downloader \
     /model-output/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf \
     /comfyui/models/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf
-
-COPY --from=model-downloader \
-    /model-output/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf \
-    /comfyui/models/diffusion_models/qwen_image_2.1_fast_v0.2.1_Q5_K_M.gguf
-
-COPY --from=model-downloader \
-    /model-output/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf \
-    /comfyui/models/diffusion_models/qwen_image_2.1-Turbo-Q5_K_M.gguf
 
 COPY --from=model-downloader \
     /model-output/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors \
@@ -332,7 +312,7 @@ RUN apt-get update \
 ENV CC=/usr/bin/gcc
 ENV CXX=/usr/bin/g++
 
-RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda); assert torch.version.cuda and int(torch.version.cuda.split('.')[0]) >= 13, 'PyTorch cu130+ is required for optimized ComfyUI CUDA kernels'" \
+RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda); assert torch.version.cuda and tuple(map(int, torch.version.cuda.split('.')[:2])) >= (12, 8), 'PyTorch cu128+ is required (Blackwell / sm_120)'" \
     && python -c "import runpod; print('RunPod SDK OK')" \
     && python -c "import gguf; print('ComfyUI-GGUF dependency OK')" \
     && python -c "import llama_cpp; print('llama-cpp-python:', llama_cpp.__version__)"
@@ -354,8 +334,6 @@ RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 RUN echo "============================================================" \
     && echo "worker-comfyui Qwen Image 2.1 GGUF image ready" \
     && echo "Quality: uncensored Q5_K_M GGUF + Turbo LoRA · 8 steps" \
-    && echo "Fast: Viggle v0.2.1 Q5_K_M GGUF · 6 steps" \
-    && echo "Turbo: Qwen Image 2.1 Turbo Q5_K_M GGUF · 8 steps" \
     && echo "Encoder: Qwen3-VL 8B Q4_K_M GGUF" \
     && echo "Prompt enhancer: I2I Q4_K_M GGUF" \
     && echo "ComfyUI: ${COMFYUI_VERSION:-0.37.0}" \
