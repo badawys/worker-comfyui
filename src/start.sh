@@ -20,8 +20,10 @@ echo "worker-comfyui: Starting ComfyUI"
 # Allow operators to tweak verbosity; INFO avoids unnecessary serverless log I/O.
 : "${COMFY_LOG_LEVEL:=INFO}"
 
+# SageAttention (Triton) speeds up attention; ComfyUI falls back to PyTorch
+# attention by itself if it errors. Set COMFY_PERFORMANCE_ARGS="" to disable all.
 if [ -z "${COMFY_PERFORMANCE_ARGS+x}" ]; then
-    COMFY_PERFORMANCE_ARGS="--fast fp16_accumulation"
+    COMFY_PERFORMANCE_ARGS="--fast fp16_accumulation --use-sage-attention"
 fi
 
 COMFY_ARGS="--disable-auto-launch --disable-metadata --verbose ${COMFY_LOG_LEVEL} --log-stdout ${COMFY_PERFORMANCE_ARGS}"

@@ -132,6 +132,8 @@ RUN mkdir -p \
     /model-output/vae \
     /model-output/LLM \
     /tmp/qwen21-diffusion \
+    /tmp/qwen21-nvfp4 \
+    /tmp/qwen21-fp8 \
     /tmp/qwen21-encoder \
     /tmp/qwen21-vae \
     /tmp/qwen21-pe \
@@ -141,41 +143,61 @@ RUN mkdir -p \
 # files replaced (2026-11-03), so the uncensored Q5_K_M file now comes from
 # mirrors pinned to a commit. Every mirror checked has the same SHA-256.
 ARG QWEN21_UC_Q5_SHA256=af0bf278cf16d204fb31c384dc82fd41dca82d976b15fe9305a60c726fd6f821
+# Same uncensored model in ComfyUI's native quantized formats (Blackwell FP4/FP8).
+ARG QWEN21_UC_NVFP4_SHA256=7cdf87660e84aecf740b5b0f65c848549ba8a74d88ac201976931ca4c780d121
+ARG QWEN21_UC_FP8_SHA256=877b77290339986bca8f771aead381c7a5777347c27d252bbaa915f76667ab0b
+# Official Comfy-Org int8 Qwen3-VL 8B text encoder (replaces the GGUF Q4 encoder).
+ARG QWEN3VL_INT8_SHA256=8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f
 
-# Download the Quality profile's Qwen Image 2.1 components in parallel.
+# Download every Qwen Image 2.1 component in parallel.
+# pinned_download FILE SHA256 DEST_DIR REPO@COMMIT [REPO@COMMIT ...] tries each
+# pinned source in turn and keeps the first file whose SHA-256 matches.
 RUN --mount=type=cache,target=/root/.cache/huggingface \
     set -eu; \
     \
-    echo "[1/5] Qwen Image 2.1 uncensored Q5_K_M diffusion"; \
-    ( \
-        for SRC in \
-            "KasugaiSakura/Qwen-Image-2.1-Uncensored-Abenzerps-GGUF@240ef1d68f778115f8ff69965eca9ad6d3ccdcf1" \
-            "basileleuwa/Qwen-Image-2.1-Uncensored-GGUF@dcbc8aaae12500aab2a00052ad6b5bbff1dea2d6"; do \
-            echo "Trying ${SRC}"; \
-            if hf download "${SRC%@*}" qwen-image-2.1-UC-Q5_K_M.gguf \
+    pinned_download() { \
+        FILE="$1"; SHA="$2"; DEST="$3"; shift 3; \
+        for SRC in "$@"; do \
+            echo "Trying ${SRC} ${FILE}"; \
+            if hf download "${SRC%@*}" "${FILE}" \
                     --revision "${SRC#*@}" \
-                    --local-dir /tmp/qwen21-diffusion \
+                    --local-dir "${DEST}" \
                     --max-workers 2 \
-                && echo "${QWEN21_UC_Q5_SHA256}  /tmp/qwen21-diffusion/qwen-image-2.1-UC-Q5_K_M.gguf" | sha256sum -c -; then \
-                exit 0; \
+                && echo "${SHA}  ${DEST}/${FILE}" | sha256sum -c -; then \
+                return 0; \
             fi; \
-            rm -f /tmp/qwen21-diffusion/qwen-image-2.1-UC-Q5_K_M.gguf; \
+            rm -f "${DEST}/${FILE}"; \
         done; \
-        exit 1 \
-    ) > /tmp/qwen21-diffusion.log 2>&1 \
+        return 1; \
+    }; \
+    UC_MIRROR_1="KasugaiSakura/Qwen-Image-2.1-Uncensored-Abenzerps-GGUF@240ef1d68f778115f8ff69965eca9ad6d3ccdcf1"; \
+    UC_MIRROR_2="basileleuwa/Qwen-Image-2.1-Uncensored-GGUF@dcbc8aaae12500aab2a00052ad6b5bbff1dea2d6"; \
+    \
+    echo "[1/7] Quality GGUF · uncensored Q5_K_M diffusion"; \
+    pinned_download qwen-image-2.1-UC-Q5_K_M.gguf "${QWEN21_UC_Q5_SHA256}" \
+        /tmp/qwen21-diffusion "${UC_MIRROR_1}" "${UC_MIRROR_2}" \
+        > /tmp/qwen21-diffusion.log 2>&1 \
         & PID_DIFFUSION=$!; \
     \
-    echo "[2/5] Qwen3-VL 8B Q4_K_M encoder + vision projector"; \
-    hf download \
-        gguf-org/qwen-image-2.1-gguf \
-        qwen3vl-8b-it-q4_k_m.gguf \
-        mmproj-qwen3vl-8b-it-q8_0.gguf \
-        --local-dir /tmp/qwen21-encoder \
-        --max-workers 2 \
+    echo "[2/7] Quality NVFP4 · uncensored native NVFP4 diffusion"; \
+    pinned_download qwen-image-2.1-UC-NVFP4.safetensors "${QWEN21_UC_NVFP4_SHA256}" \
+        /tmp/qwen21-nvfp4 "${UC_MIRROR_1}" \
+        > /tmp/qwen21-nvfp4.log 2>&1 \
+        & PID_NVFP4=$!; \
+    \
+    echo "[3/7] Quality FP8 · uncensored native FP8 diffusion"; \
+    pinned_download qwen-image-2.1-UC-fp8.safetensors "${QWEN21_UC_FP8_SHA256}" \
+        /tmp/qwen21-fp8 "${UC_MIRROR_1}" "${UC_MIRROR_2}" \
+        > /tmp/qwen21-fp8.log 2>&1 \
+        & PID_FP8=$!; \
+    \
+    echo "[4/7] Official Qwen3-VL 8B int8 text encoder"; \
+    pinned_download text_encoders/qwen3vl_8b_int8_convrot.safetensors "${QWEN3VL_INT8_SHA256}" \
+        /tmp/qwen21-encoder "Comfy-Org/Qwen-Image-2.1@aacf31a6d48e707f352ecba714cee0680da3479b" \
         > /tmp/qwen21-encoder.log 2>&1 \
         & PID_ENCODER=$!; \
     \
-    echo "[3/5] Official Qwen Image 2.1 VAE"; \
+    echo "[5/7] Official Qwen Image 2.1 VAE"; \
     hf download \
         Comfy-Org/Qwen-Image-2.1 \
         vae/qwen_image_2.1_vae_bf16.safetensors \
@@ -184,7 +206,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-vae.log 2>&1 \
         & PID_VAE=$!; \
     \
-    echo "[4/5] Qwen Image 2.1 I2I prompt enhancer Q4_K_M + projector"; \
+    echo "[6/7] Qwen Image 2.1 I2I prompt enhancer Q4_K_M + projector"; \
     hf download \
         prithivMLmods/Qwen-Image-2.1-PE-I2I-GGUF \
         Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf \
@@ -194,7 +216,7 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
         > /tmp/qwen21-pe.log 2>&1 \
         & PID_PE=$!; \
     \
-    echo "[5/5] Quality · official Qwen Image 2.1 Turbo LoRA"; \
+    echo "[7/7] Quality · official Qwen Image 2.1 Turbo LoRA"; \
     hf download \
         Comfy-Org/Qwen-Image-2.1 \
         loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors \
@@ -206,6 +228,8 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
     FAILED=0; \
     for ITEM in \
         "DIFFUSION:${PID_DIFFUSION}:/tmp/qwen21-diffusion.log" \
+        "NVFP4:${PID_NVFP4}:/tmp/qwen21-nvfp4.log" \
+        "FP8:${PID_FP8}:/tmp/qwen21-fp8.log" \
         "ENCODER:${PID_ENCODER}:/tmp/qwen21-encoder.log" \
         "VAE:${PID_VAE}:/tmp/qwen21-vae.log" \
         "PROMPT_ENHANCER:${PID_PE}:/tmp/qwen21-pe.log" \
@@ -230,10 +254,12 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
     \
     mv /tmp/qwen21-diffusion/qwen-image-2.1-UC-Q5_K_M.gguf \
         /model-output/diffusion_models/qwen-image-2.1-UC-Q5_K_M.gguf; \
-    mv /tmp/qwen21-encoder/qwen3vl-8b-it-q4_k_m.gguf \
-        /model-output/text_encoders/qwen3vl-8b-it-q4_k_m.gguf; \
-    mv /tmp/qwen21-encoder/mmproj-qwen3vl-8b-it-q8_0.gguf \
-        /model-output/text_encoders/mmproj-qwen3vl-8b-it-q8_0.gguf; \
+    mv /tmp/qwen21-nvfp4/qwen-image-2.1-UC-NVFP4.safetensors \
+        /model-output/diffusion_models/qwen-image-2.1-UC-NVFP4.safetensors; \
+    mv /tmp/qwen21-fp8/qwen-image-2.1-UC-fp8.safetensors \
+        /model-output/diffusion_models/qwen-image-2.1-UC-fp8.safetensors; \
+    mv /tmp/qwen21-encoder/text_encoders/qwen3vl_8b_int8_convrot.safetensors \
+        /model-output/text_encoders/qwen3vl_8b_int8_convrot.safetensors; \
     mv /tmp/qwen21-vae/vae/qwen_image_2.1_vae_bf16.safetensors \
         /model-output/vae/qwen_image_2.1_vae_bf16.safetensors; \
     mv /tmp/qwen21-pe/Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf \
@@ -243,11 +269,15 @@ RUN --mount=type=cache,target=/root/.cache/huggingface \
     \
     rm -rf \
         /tmp/qwen21-diffusion \
+        /tmp/qwen21-nvfp4 \
+        /tmp/qwen21-fp8 \
         /tmp/qwen21-encoder \
         /tmp/qwen21-vae \
         /tmp/qwen21-pe \
         /tmp/qwen21-turbo-lora \
         /tmp/qwen21-diffusion.log \
+        /tmp/qwen21-nvfp4.log \
+        /tmp/qwen21-fp8.log \
         /tmp/qwen21-encoder.log \
         /tmp/qwen21-vae.log \
         /tmp/qwen21-pe.log \
@@ -281,12 +311,16 @@ COPY --from=model-downloader \
     /comfyui/models/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors
 
 COPY --from=model-downloader \
-    /model-output/text_encoders/qwen3vl-8b-it-q4_k_m.gguf \
-    /comfyui/models/text_encoders/qwen3vl-8b-it-q4_k_m.gguf
+    /model-output/diffusion_models/qwen-image-2.1-UC-NVFP4.safetensors \
+    /comfyui/models/diffusion_models/qwen-image-2.1-UC-NVFP4.safetensors
 
 COPY --from=model-downloader \
-    /model-output/text_encoders/mmproj-qwen3vl-8b-it-q8_0.gguf \
-    /comfyui/models/text_encoders/mmproj-qwen3vl-8b-it-q8_0.gguf
+    /model-output/diffusion_models/qwen-image-2.1-UC-fp8.safetensors \
+    /comfyui/models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors
+
+COPY --from=model-downloader \
+    /model-output/text_encoders/qwen3vl_8b_int8_convrot.safetensors \
+    /comfyui/models/text_encoders/qwen3vl_8b_int8_convrot.safetensors
 
 COPY --from=model-downloader \
     /model-output/vae/qwen_image_2.1_vae_bf16.safetensors \
@@ -299,6 +333,10 @@ COPY --from=model-downloader \
 COPY --from=model-downloader \
     /model-output/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf \
     /comfyui/models/LLM/Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf
+
+# SageAttention 1.0.6 is pure Triton (no CUDA compile step), so it works with
+# PyTorch cu130 on Blackwell. 2.x needs a full CUDA toolkit build instead.
+RUN uv pip install --python /comfyui/.venv/bin/python --no-deps sageattention==1.0.6
 
 # Keep a compiler available for PyTorch/Triton JIT kernels.
 RUN apt-get update \
@@ -314,6 +352,7 @@ ENV CXX=/usr/bin/g++
 RUN python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda); assert torch.version.cuda and int(torch.version.cuda.split('.')[0]) >= 13, 'PyTorch cu130+ is required for optimized ComfyUI CUDA kernels'" \
     && python -c "import runpod; print('RunPod SDK OK')" \
     && python -c "import gguf; print('ComfyUI-GGUF dependency OK')" \
+    && python -c "import triton, sageattention; print('Triton', triton.__version__, '+ SageAttention OK')" \
     && python -c "import llama_cpp; print('llama-cpp-python:', llama_cpp.__version__)"
 
 WORKDIR /
@@ -331,9 +370,9 @@ COPY scripts/comfy-manager-set-mode.sh /usr/local/bin/comfy-manager-set-mode
 RUN chmod +x /usr/local/bin/comfy-manager-set-mode
 
 RUN echo "============================================================" \
-    && echo "worker-comfyui Qwen Image 2.1 GGUF image ready" \
-    && echo "Quality: uncensored Q5_K_M GGUF + Turbo LoRA · 8 steps" \
-    && echo "Encoder: Qwen3-VL 8B Q4_K_M GGUF" \
+    && echo "worker-comfyui Qwen Image 2.1 image ready" \
+    && echo "Quality (8 steps, Turbo LoRA): GGUF Q5_K_M | NVFP4 | FP8" \
+    && echo "Encoder: Qwen3-VL 8B int8 (official Comfy-Org)" \
     && echo "Prompt enhancer: I2I Q4_K_M GGUF" \
     && echo "ComfyUI: ${COMFYUI_VERSION:-0.37.0}" \
     && echo "============================================================"

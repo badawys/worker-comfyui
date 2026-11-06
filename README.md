@@ -16,19 +16,27 @@ This project allows you to run ComfyUI workflows as a serverless API endpoint on
 
 ## Qwen Image 2.1 GGUF Worker
 
-The `qwen-image-2.1-gguf` branch provides one Qwen Image 2.1 image-editing profile, **Quality (8 steps)**, for RunPod Serverless, with an optional local I2I prompt enhancer.
+The `qwen-image-2.1-gguf` branch provides one Qwen Image 2.1 image-editing profile, **Quality (8 steps)**, for RunPod Serverless, in three weight formats so speed and quality can be compared, with an optional local I2I prompt enhancer.
 
-### Quality profile
+### Quality profile and model formats
 
-| Diffusion | Sampling |
-| --- | --- |
-| `qwen-image-2.1-UC-Q5_K_M.gguf` + official Turbo LoRA (strength 1) | Official 8-step sigma schedule · Euler · CFG 1 |
+All three use the same uncensored model, the official Turbo LoRA (strength 1) and the official 8-step sigma schedule · Euler · CFG 1. Only the diffusion weights differ:
 
-Quality applies the [official extracted Turbo LoRA](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors) through `LoraLoaderModelOnly`, between `UnetLoaderGGUF` and `QwenImage21Cache`, then samples with `CFGGuider` (CFG 1), `KSamplerSelect` (Euler), `ManualSigmas` and `SamplerCustomAdvanced`. The sigma schedule comes from the [official image-edit template](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_qwen_image_2_1_turbo_image_edit.json): `1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`.
+| Format | Workflow | Diffusion file | Loader |
+| --- | --- | --- | --- |
+| **GGUF** (baseline) | `workflows/qwen_image_2_1_quality.json` | `qwen-image-2.1-UC-Q5_K_M.gguf` (5.2 GB) | `UnetLoaderGGUF` |
+| **NVFP4** | `workflows/qwen_image_2_1_quality_nvfp4.json` | `qwen-image-2.1-UC-NVFP4.safetensors` (4.2 GB) | `UNETLoader` |
+| **FP8** | `workflows/qwen_image_2_1_quality_fp8.json` | `qwen-image-2.1-UC-fp8.safetensors` (7.1 GB) | `UNETLoader` |
+
+NVFP4 and FP8 use ComfyUI's native quantized format (`comfy_quant`), so ComfyUI runs them with native FP4/FP8 matmuls ("mixed precision operations"). ComfyUI enables NVFP4 compute on compute capability 10+ and FP8 on 8.9+; RTX PRO 6000 (12.0) supports both. GGUF dequantizes weights on every step instead.
+
+The LoRA is merged into the quantized weights once at load (ComfyUI re-quantizes the patched weights), so the fast matmul path stays on. If a model ever only partly fits in VRAM, ComfyUI applies the LoRA on the fly instead, which falls back to slower full-precision math.
+
+Quality applies the [official extracted Turbo LoRA](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors) through `LoraLoaderModelOnly`, between the diffusion loader and `QwenImage21Cache`, then samples with `CFGGuider` (CFG 1), `KSamplerSelect` (Euler), `ManualSigmas` and `SamplerCustomAdvanced`. The sigma schedule comes from the [official image-edit template](https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_qwen_image_2_1_turbo_image_edit.json): `1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0`.
 
 The Fast (Viggle) and Turbo profiles and their models have been removed.
 
-**Model source:** the original `abenzerps/Qwen-Image-2.1-Uncensored-GGUF` repo was renamed and its files replaced on 2026-11-03. The build now downloads `qwen-image-2.1-UC-Q5_K_M.gguf` from a mirror pinned to a commit, falls back to a second mirror, and checks the file's SHA-256 (`QWEN21_UC_Q5_SHA256` build arg).
+**Model sources:** the original `abenzerps/Qwen-Image-2.1-Uncensored-GGUF` repo was renamed and its files replaced on 2026-11-03. The build downloads the uncensored files from mirrors pinned to a commit and checks each file's SHA-256 (`QWEN21_UC_*_SHA256` build args). GGUF and FP8 have a second mirror as fallback; NVFP4 is only available from `KasugaiSakura/Qwen-Image-2.1-Uncensored-Abenzerps-GGUF`.
 
 ### Exact output size and position
 
@@ -38,14 +46,13 @@ When `COMFY_INPUT_MAX_DIMENSION` shrinks an upload, the handler scales the outpu
 
 ### Quality LoRA compatibility
 
-The Quality GGUF stores separate `img_mlp.gate_layer` and `img_mlp.proj` tensors. The official LoRA stores fused `img_mlp.gate_up` adapters, which can be silently skipped by the current ComfyUI mapping ([upstream issue #16944](https://github.com/Comfy-Org/ComfyUI/issues/16944)). The model-downloader stage runs `scripts/prepare_qwen21_turbo_lora.py` once to split all 32 MLP adapters: split `lora_up` row-wise and duplicate `lora_down` and `alpha`. This preserves the adapter matrix products, BF16 precision, rank and scale. The prepared file is stored as `models/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors`. The script fails the build on unexpected or incomplete layouts.
+The GGUF and FP8 files store separate `img_mlp.gate_layer` and `img_mlp.proj` tensors; NVFP4 stores them fused as `img_mlp.gate_up`. ComfyUI's LoRA mapping addresses the halves for both layouts, so the one prepared LoRA below works for all three formats. The official LoRA stores fused `img_mlp.gate_up` adapters, which can be silently skipped by the current ComfyUI mapping ([upstream issue #16944](https://github.com/Comfy-Org/ComfyUI/issues/16944)). The model-downloader stage runs `scripts/prepare_qwen21_turbo_lora.py` once to split all 32 MLP adapters: split `lora_up` row-wise and duplicate `lora_down` and `alpha`. This preserves the adapter matrix products, BF16 precision, rank and scale. The prepared file is stored as `models/loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16_unfused.safetensors`. The script fails the build on unexpected or incomplete layouts.
 
 ### Shared models
 
 | Component | Model |
 | --- | --- |
-| Qwen3-VL image/text encoder | `qwen3vl-8b-it-q4_k_m.gguf` |
-| Qwen3-VL vision projector | `mmproj-qwen3vl-8b-it-q8_0.gguf` |
+| Qwen3-VL image/text encoder (vision included) | `qwen3vl_8b_int8_convrot.safetensors` (official Comfy-Org, int8, `CLIPLoader` type `qwen_image`) |
 | I2I prompt enhancer | `Qwen-Image-2.1-PE-I2I.Q4_K_M.gguf` |
 | Prompt-enhancer vision projector | `Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf` |
 | VAE | `qwen_image_2.1_vae_bf16.safetensors` |
@@ -54,7 +61,9 @@ The prompt enhancer is optional per request and off by default in RadiantLunar, 
 
 ### Workflows
 
-- `workflows/qwen_image_2_1_quality.json`
+- `workflows/qwen_image_2_1_quality.json` (GGUF)
+- `workflows/qwen_image_2_1_quality_nvfp4.json`
+- `workflows/qwen_image_2_1_quality_fp8.json`
 - `workflows/qwen_image_2_1_edit_gguf.json` remains as the original unaccelerated 25-step workflow for backwards compatibility.
 
 RadiantLunar normalizes every uploaded image to a maximum 768px longest side while preserving aspect ratio. The worker enforces the same cap as a fallback for direct API callers.
@@ -63,7 +72,20 @@ RadiantLunar normalizes every uploaded image to a maximum 768px longest side whi
 
 Thinking mode with 400 plan tokens, a 1536-token answer cap, 12288-token context, and a 1024px vision preview. The preview is a separate tensor used only by the prompt enhancer. The explicit answer cap stops a runaway completion from filling the context and failing with `decode: failed to find a memory slot for batch of size 1`.
 
-ComfyUI starts with `--fast fp16_accumulation` by default. Set `COMFY_PERFORMANCE_ARGS=""` to disable it without rebuilding the image, or override the variable with another supported ComfyUI performance flag set.
+### Speed settings
+
+ComfyUI starts with `--fast fp16_accumulation --use-sage-attention` by default. Set `COMFY_PERFORMANCE_ARGS=""` to disable both without rebuilding, or set your own flags.
+
+- **SageAttention 1.0.6** (pure Triton, no CUDA compile; works with PyTorch cu130 on Blackwell). Triton compiles its kernels on the first job of a fresh worker, so that first job is slower. ComfyUI falls back to PyTorch attention by itself if Sage errors, and skips it for masked attention. SageAttention 2.x would need a full CUDA toolkit build against PyTorch, which doesn't fit RunPod's build time limit.
+- **int8 Qwen3-VL encoder** instead of the GGUF Q4 encoder: int8 matmuls instead of per-step GGUF unpacking, and higher precision than Q4. Used by all three formats, so comparisons only differ in the diffusion weights.
+
+Not enabled, on purpose:
+
+- `--fast fp8_matrix_mult`: no effect here. Native quantized files already use FP8/FP4 matmuls; the flag only applies to plain FP8 checkpoints.
+- `--fast cublas_ops`: only for fp16 weights, and needs an extra compiled package.
+- `--fast autotune` (cuDNN benchmark): re-tunes for every new image size, and sizes change per upload, so it tends to cost more than it saves on serverless.
+- `QwenImage21Cache dtype=int8`: only helps when VRAM is short; with spare VRAM it adds work and some error.
+- `--highvram`: ComfyUI already keeps models in VRAM when there is room; forcing it risks running out of memory on a 24 GB MIG slice when switching formats or with the prompt enhancer on.
 
 The handler already uses direct writes to `/comfyui/input`, websocket image output, in-memory result handling and direct S3 upload; the slower localhost multipart/history/view/temp-file path is retained only as a compatibility fallback.
 
@@ -85,6 +107,7 @@ A CUDA 13 driver runs both the CUDA 13 PyTorch runtime and the CUDA 12.8 llama.c
 - `leejet/ComfyUI-GGUF`
 - `xiaowuapple-pixel/ComfyUI-Prompt-Enhancer`
 - Local nodes: `PEPreviewResize`, `QwenResizeToReference`
+- SageAttention 1.0.6 (Triton)
 - JamePeng prebuilt CUDA 12.8 / Python 3.12 `llama-cpp-python` wheel; no llama.cpp source compilation during the RunPod build
 
 Rebuild and deploy the worker image before sending the updated RadiantLunar workflow: older images lack the `QwenResizeToReference` node. The RunPod input/output contract is unchanged.

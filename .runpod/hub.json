@@ -1,12 +1,12 @@
 {
   "title": "Qwen Image 2.1 GGUF - ComfyUI",
-  "description": "Qwen Image 2.1 editing (Quality, 8 steps: uncensored Q5_K_M GGUF + Turbo LoRA), GGUF encoder, and optional local I2I prompt enhancement. CUDA 13.0+ (Blackwell ready).",
+  "description": "Qwen Image 2.1 editing: Quality (8 steps, uncensored + Turbo LoRA) in GGUF, NVFP4 or FP8; int8 Qwen3-VL encoder; SageAttention; optional local I2I prompt enhancement. CUDA 13.0+ (Blackwell ready).",
   "type": "serverless",
   "category": "image",
   "iconUrl": "https://cpjrphpz3t5wbwfe.public.blob.vercel-storage.com/comfy-ui.png",
   "config": {
     "runsOn": "GPU",
-    "containerDiskInGb": 55,
+    "containerDiskInGb": 65,
     "gpuIds": "ADA_24",
     "gpuCount": 1,
     "allowedCudaVersions": [
